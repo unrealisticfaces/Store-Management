@@ -37,11 +37,11 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
       return { success: true };
     },
     deleteUser: async (id) => {
-      const users = JSON.parse(localStorage.getItem('pos_users') || '[]');
+      const users = JSON.parse(localStorage.getItem('pos_users') || '[{"id":1,"username":"admin","name":"System Admin","role":"manager","password":"admin123"}]');
       localStorage.setItem('pos_users', JSON.stringify(users.filter(i => i.id !== id)));
     },
     updateUserPassword: async (id, newPassword) => {
-      const users = JSON.parse(localStorage.getItem('pos_users') || '[]');
+      const users = JSON.parse(localStorage.getItem('pos_users') || '[{"id":1,"username":"admin","name":"System Admin","role":"manager","password":"admin123"}]');
       localStorage.setItem('pos_users', JSON.stringify(users.map(u => u.id === id ? { ...u, password: newPassword } : u)));
       return { success: true };
     },
@@ -731,7 +731,6 @@ export default function App() {
   const lowStockItems = inventory.filter(i => (Number(i.stock)||0) > 0 && (Number(i.stock)||0) <= settings.lowStockThreshold);
   const outOfStockCount = outOfStockItems.length;
   const lowStockCount = lowStockItems.length;
-
   const notificationElement = notification && (
     <div className={`fixed bottom-6 right-6 z-50 px-6 py-4 rounded-xl shadow-lg border text-[10px] uppercase font-bold tracking-widest flex items-center gap-3 transition-opacity duration-300 transform ${
       notification.type === 'success' ? 'bg-white dark:bg-zinc-900 border-green-500/50 text-green-500 dark:text-green-400' :
@@ -761,7 +760,7 @@ export default function App() {
                 type="text" 
                 value={loginUsername} 
                 onChange={(e) => setLoginUsername(e.target.value)} 
-                className="w-full text-[10px] font-bold py-3 px-4 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors uppercase tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
+                className="w-full text-[10px] font-bold py-2.5 px-4 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors uppercase tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm" 
                 placeholder="USERNAME" autoFocus
               />
             </div>
@@ -771,7 +770,7 @@ export default function App() {
                 value={loginPassword} 
                 onChange={(e) => setLoginPassword(e.target.value)} 
                 onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                className="w-full text-lg tracking-[0.2em] py-1.5 pl-4 pr-10 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-600 placeholder:tracking-widest placeholder:text-[10px] placeholder:font-bold" 
+                className={`w-full pl-4 pr-10 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm ${showLoginPassword ? 'text-[10px] font-bold font-sans' : 'text-lg tracking-[0.2em] font-medium'}`} 
                 placeholder="PASSWORD"
               />
               <button type="button" onClick={() => setShowLoginPassword(!showLoginPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
@@ -904,7 +903,7 @@ export default function App() {
                     type={showAddUserPassword ? "text" : "password"} 
                     value={userFormData.password} 
                     onChange={e => setUserFormData({...userFormData, password: e.target.value})} 
-                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
+                    className={`w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm ${showAddUserPassword ? 'text-[10px] font-bold font-sans' : 'text-lg tracking-[0.2em] font-medium'}`} 
                     placeholder="CREATE PASSWORD" 
                   />
                   <button type="button" onClick={() => setShowAddUserPassword(!showAddUserPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
@@ -948,7 +947,7 @@ export default function App() {
                     type={showResetNewPassword ? "text" : "password"} 
                     value={resetPasswordData.newPassword} 
                     onChange={e => setResetPasswordData({...resetPasswordData, newPassword: e.target.value})} 
-                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
+                    className={`w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm ${showResetNewPassword ? 'text-[10px] font-bold font-sans' : 'text-lg tracking-[0.2em] font-medium'}`} 
                     placeholder="••••••••" 
                     autoFocus 
                   />
@@ -971,7 +970,7 @@ export default function App() {
                     type={showResetConfirmPassword ? "text" : "password"} 
                     value={resetPasswordData.confirmPassword} 
                     onChange={e => setResetPasswordData({...resetPasswordData, confirmPassword: e.target.value})} 
-                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
+                    className={`w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm ${showResetConfirmPassword ? 'text-[10px] font-bold font-sans' : 'text-lg tracking-[0.2em] font-medium'}`} 
                     placeholder="••••••••" 
                   />
                   <button type="button" onClick={() => setShowResetConfirmPassword(!showResetConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
@@ -1426,7 +1425,7 @@ export default function App() {
 
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-8 shadow-sm">
                 <div className="flex items-center gap-2 mb-6 border-b border-zinc-200 dark:border-zinc-800 pb-4">
-                  <svg className="w-4 h-4 text-zinc-900 dark:text-zinc-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+                  <svg className="w-4 h-4 text-zinc-900 dark:text-zinc-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
                   <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100">HARDWARE INTEGRATION</h3>
                 </div>
                 
