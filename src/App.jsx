@@ -47,7 +47,7 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
     },
     loginUser: async ({ username, password }) => {
       const users = JSON.parse(localStorage.getItem('pos_users') || '[{"id":1,"username":"admin","name":"System Admin","role":"manager","password":"admin123"}]');
-      return users.find(u => u.username === username && u.password === password) || null;
+      return users.find(u => u.username.toLowerCase() === username.toLowerCase() && u.password === password) || null;
     },
     getActiveShift: async () => JSON.parse(localStorage.getItem('pos_shift') || 'null'),
     openShift: async (s) => localStorage.setItem('pos_shift', JSON.stringify(s)),
@@ -108,6 +108,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   
   const [inventory, setInventory] = useState([]);
   const [sales, setSales] = useState([]);
@@ -132,10 +133,13 @@ export default function App() {
   
   const [isAddingUser, setIsAddingUser] = useState(false);
   const [userFormData, setUserFormData] = useState({ username: '', name: '', password: '', role: 'cashier' });
+  const [showAddUserPassword, setShowAddUserPassword] = useState(false);
 
   const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
   const [resetTargetUser, setResetTargetUser] = useState(null);
   const [resetPasswordData, setResetPasswordData] = useState({ newPassword: '', confirmPassword: '' });
+  const [showResetNewPassword, setShowResetNewPassword] = useState(false);
+  const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
   
   const [confirmDialog, setConfirmDialog] = useState(null);
 
@@ -174,6 +178,7 @@ export default function App() {
 
   const [notification, setNotification] = useState(null);
   const [systemPrinters, setSystemPrinters] = useState([]);
+  const [theme, setTheme] = useState(() => localStorage.getItem('pos_theme') || 'dark');
 
   const searchInputRef = useRef(null);
   const amountInputRef = useRef(null);
@@ -195,6 +200,19 @@ export default function App() {
   });
 
   useEffect(() => { localStorage.setItem('pos_settings', JSON.stringify(settings)); }, [settings]);
+  
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+      root.classList.remove('light');
+    } else {
+      root.classList.add('light');
+      root.classList.remove('dark');
+    }
+    localStorage.setItem('pos_theme', theme);
+  }, [theme]);
+
   useEffect(() => { setSalesPage(1); }, [salesSearchQuery, salesCashierFilter, salesDateFilter, salesCustomDate]);
   useEffect(() => { setInventoryPage(1); }, [inventorySearchQuery, inventoryCategoryFilter]);
   useEffect(() => { setStocksPage(1); }, [stocksSearchQuery, stocksCategoryFilter]);
@@ -278,7 +296,7 @@ export default function App() {
 
   const handleLogin = async () => {
     try {
-      const user = await window.electronAPI.loginUser({ username: loginUsername.toLowerCase(), password: loginPassword });
+      const user = await window.electronAPI.loginUser({ username: loginUsername, password: loginPassword });
       if (user) {
         const currentShift = await window.electronAPI.getActiveShift();
         if (currentShift && currentShift.opened_by !== user.name && user.role !== 'manager') {
@@ -504,11 +522,14 @@ export default function App() {
     try {
       if (window.electronAPI.updateUserPassword) {
         await window.electronAPI.updateUserPassword(resetTargetUser.id, resetPasswordData.newPassword);
+        setUsers(await window.electronAPI.getUsers() || users);
         showNotification('PASSWORD UPDATED', 'success');
       }
       setIsResetPasswordModalOpen(false);
       setResetTargetUser(null);
       setResetPasswordData({ newPassword: '', confirmPassword: '' });
+      setShowResetNewPassword(false);
+      setShowResetConfirmPassword(false);
     } catch (e) { showNotification('FAILED TO UPDATE PASSWORD', 'error'); }
   };
 
@@ -581,6 +602,7 @@ export default function App() {
   };
 
   const weekDays = getMonToSun();
+  
   const barData = weekDays.map(dateObj => {
     const dateStr = dateObj.toLocaleDateString();
     const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
@@ -589,13 +611,36 @@ export default function App() {
     return { name: dayName.toUpperCase(), Revenue: revenue };
   });
 
+  const weekSales = sales.filter(s => {
+    if (!s.timestamp) return false;
+    const sd = new Date(s.timestamp);
+    const firstDay = new Date(weekDays[0]);
+    firstDay.setHours(0,0,0,0);
+    const lastDay = new Date(weekDays[6]);
+    lastDay.setHours(23,59,59,999);
+    return sd >= firstDay && sd <= lastDay;
+  });
+
   const cashierSalesAggregate = {};
-  todaysSales.forEach(s => {
+  weekSales.forEach(s => {
     cashierSalesAggregate[s.cashier] = (cashierSalesAggregate[s.cashier] || 0) + (Number(s.total) || 0);
   });
   const cashierData = Object.keys(cashierSalesAggregate)
     .map(k => ({ name: k, Revenue: cashierSalesAggregate[k] }))
     .sort((a, b) => b.Revenue - a.Revenue);
+  
+  const topCashiers = cashierData.slice(0, 2).map(c => c.name);
+
+  const dailyCashierData = weekDays.map(dateObj => {
+    const dateStr = dateObj.toLocaleDateString();
+    const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+    const obj = { name: dayName.toUpperCase() };
+    topCashiers.forEach(c => {
+      const daySales = weekSales.filter(s => s.cashier === c && s.timestamp && s.timestamp.includes(dateStr));
+      obj[c] = daySales.reduce((sum, s) => sum + (Number(s.total)||0), 0);
+    });
+    return obj;
+  });
 
   const allTimeCategoryCount = {};
   sales.forEach(s => Array.isArray(s.items) && s.items.forEach(i => { 
@@ -603,34 +648,6 @@ export default function App() {
     allTimeCategoryCount[cat] = (allTimeCategoryCount[cat] || 0) + (Number(i.qty)||0); 
   }));
   const pieData = Object.keys(allTimeCategoryCount).map(k => ({ name: k, value: allTimeCategoryCount[k] })).sort((a,b) => b.value - a.value);
-
-  const filteredTerminalInventory = inventory.filter(item => {
-    const matchSearch = searchQuery === '' || item.name.toLowerCase().includes(searchQuery.toLowerCase()) || item.sku.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchCat = terminalCategory === 'ALL' || item.category === terminalCategory;
-    return matchSearch && matchCat;
-  });
-
-  const filteredInventoryView = inventory.filter(item => {
-    const matchSearch = item.name.toLowerCase().includes(inventorySearchQuery.toLowerCase()) || item.sku.toLowerCase().includes(inventorySearchQuery.toLowerCase());
-    const matchCat = inventoryCategoryFilter === 'ALL' || item.category === inventoryCategoryFilter;
-    return matchSearch && matchCat;
-  });
-  const invTotalPages = Math.ceil(filteredInventoryView.length / ITEMS_PER_PAGE) || 1;
-  const paginatedInventory = filteredInventoryView.slice((inventoryPage - 1) * ITEMS_PER_PAGE, inventoryPage * ITEMS_PER_PAGE);
-
-  const filteredStocksView = inventory.filter(item => {
-    const matchSearch = item.name.toLowerCase().includes(stocksSearchQuery.toLowerCase()) || item.sku.toLowerCase().includes(stocksSearchQuery.toLowerCase());
-    const matchCat = stocksCategoryFilter === 'ALL' || item.category === stocksCategoryFilter;
-    return matchSearch && matchCat;
-  });
-  const stocksTotalPages = Math.ceil(filteredStocksView.length / ITEMS_PER_PAGE) || 1;
-  const paginatedStocks = filteredStocksView.slice((stocksPage - 1) * ITEMS_PER_PAGE, stocksPage * ITEMS_PER_PAGE);
-
-  const totalInventoryValue = filteredStocksView.reduce((sum, item) => sum + ((Number(item.cost) || 0) * (Number(item.stock) || 0)), 0);
-  const outOfStockItems = inventory.filter(i => (Number(i.stock)||0) <= 0);
-  const lowStockItems = inventory.filter(i => (Number(i.stock)||0) > 0 && (Number(i.stock)||0) <= settings.lowStockThreshold);
-  const outOfStockCount = outOfStockItems.length;
-  const lowStockCount = lowStockItems.length;
 
   const filteredPrintLabelsList = inventory.filter(item => {
     const matchSearch = printSearchQuery === '' || item.name.toLowerCase().includes(printSearchQuery.toLowerCase()) || item.sku.toLowerCase().includes(printSearchQuery.toLowerCase());
@@ -687,14 +704,55 @@ export default function App() {
   const logsTotalPages = Math.ceil(filteredLogs.length / ITEMS_PER_PAGE) || 1;
   const paginatedLogs = filteredLogs.slice((logsPage - 1) * ITEMS_PER_PAGE, logsPage * ITEMS_PER_PAGE);
 
+  const filteredTerminalInventory = inventory.filter(item => {
+    const matchSearch = searchQuery === '' || item.name.toLowerCase().includes(searchQuery.toLowerCase()) || item.sku.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchCat = terminalCategory === 'ALL' || item.category === terminalCategory;
+    return matchSearch && matchCat;
+  });
+
+  const filteredInventoryView = inventory.filter(item => {
+    const matchSearch = item.name.toLowerCase().includes(inventorySearchQuery.toLowerCase()) || item.sku.toLowerCase().includes(inventorySearchQuery.toLowerCase());
+    const matchCat = inventoryCategoryFilter === 'ALL' || item.category === inventoryCategoryFilter;
+    return matchSearch && matchCat;
+  });
+  const invTotalPages = Math.ceil(filteredInventoryView.length / ITEMS_PER_PAGE) || 1;
+  const paginatedInventory = filteredInventoryView.slice((inventoryPage - 1) * ITEMS_PER_PAGE, inventoryPage * ITEMS_PER_PAGE);
+
+  const filteredStocksView = inventory.filter(item => {
+    const matchSearch = item.name.toLowerCase().includes(stocksSearchQuery.toLowerCase()) || item.sku.toLowerCase().includes(stocksSearchQuery.toLowerCase());
+    const matchCat = stocksCategoryFilter === 'ALL' || item.category === stocksCategoryFilter;
+    return matchSearch && matchCat;
+  });
+  const stocksTotalPages = Math.ceil(filteredStocksView.length / ITEMS_PER_PAGE) || 1;
+  const paginatedStocks = filteredStocksView.slice((stocksPage - 1) * ITEMS_PER_PAGE, stocksPage * ITEMS_PER_PAGE);
+
+  const totalInventoryValue = filteredStocksView.reduce((sum, item) => sum + ((Number(item.cost) || 0) * (Number(item.stock) || 0)), 0);
+  const outOfStockItems = inventory.filter(i => (Number(i.stock)||0) <= 0);
+  const lowStockItems = inventory.filter(i => (Number(i.stock)||0) > 0 && (Number(i.stock)||0) <= settings.lowStockThreshold);
+  const outOfStockCount = outOfStockItems.length;
+  const lowStockCount = lowStockItems.length;
+
+  const notificationElement = notification && (
+    <div className={`fixed bottom-6 right-6 z-50 px-6 py-4 rounded-xl shadow-lg border text-[10px] uppercase font-bold tracking-widest flex items-center gap-3 transition-opacity duration-300 transform ${
+      notification.type === 'success' ? 'bg-white dark:bg-zinc-900 border-green-500/50 text-green-500 dark:text-green-400' :
+      notification.type === 'error' ? 'bg-white dark:bg-zinc-900 border-red-500/50 text-red-500 dark:text-red-400' :
+      notification.type === 'warning' ? 'bg-white dark:bg-zinc-900 border-amber-500/50 text-amber-500 dark:text-amber-400' :
+      'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300'
+    }`}>
+      <span className={`w-2 h-2 rounded-full ${notification.type === 'success' ? 'bg-green-500' : notification.type === 'error' ? 'bg-red-500' : notification.type === 'warning' ? 'bg-amber-500' : 'bg-zinc-500'}`}></span>
+      {notification.message}
+    </div>
+  );
+
   if (!currentUser) {
     return (
-      <div className="h-screen flex items-center justify-center bg-zinc-950 font-sans relative overflow-hidden">
-        <div className="relative bg-zinc-900 border border-zinc-800 p-10 rounded-2xl shadow-2xl w-[400px] z-10 flex flex-col items-center">
+      <div className="h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 font-sans relative overflow-hidden">
+        {notificationElement}
+        <div className="relative bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-10 rounded-2xl shadow-2xl w-[400px] z-10 flex flex-col items-center">
           <div className="w-12 h-12 bg-amber-500 rounded-lg flex items-center justify-center text-zinc-950 font-bold text-xl mb-6 shadow-sm">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
           </div>
-          <h1 className="text-[15px] font-bold text-zinc-100 mb-1 uppercase tracking-widest text-center">{settings.storeName}</h1>
+          <h1 className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100 mb-1 uppercase tracking-widest text-center">{settings.storeName}</h1>
           <p className="text-[10px] font-bold text-zinc-500 mb-8 uppercase tracking-widest text-center">AUTHENTICATION REQUIRED</p>
           
           <div className="space-y-4 mb-8 w-full">
@@ -703,19 +761,28 @@ export default function App() {
                 type="text" 
                 value={loginUsername} 
                 onChange={(e) => setLoginUsername(e.target.value)} 
-                className="w-full text-[10px] font-bold py-3 px-4 bg-zinc-950 border border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-100 transition-colors uppercase tracking-widest placeholder:text-zinc-600" 
+                className="w-full text-[10px] font-bold py-3 px-4 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors uppercase tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
                 placeholder="USERNAME" autoFocus
               />
             </div>
-            <div>
+            <div className="relative w-full">
               <input 
-                type="password" 
+                type={showLoginPassword ? "text" : "password"}
                 value={loginPassword} 
                 onChange={(e) => setLoginPassword(e.target.value)} 
                 onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                className="w-full text-lg tracking-[0.2em] py-1.5 px-4 bg-zinc-950 border border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-100 transition-colors placeholder:text-zinc-600 placeholder:tracking-widest placeholder:text-[10px] placeholder:font-bold" 
+                className="w-full text-lg tracking-[0.2em] py-1.5 pl-4 pr-10 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-600 placeholder:tracking-widest placeholder:text-[10px] placeholder:font-bold" 
                 placeholder="PASSWORD"
               />
+              <button type="button" onClick={() => setShowLoginPassword(!showLoginPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {showLoginPassword ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.29 3.29m0 0a10.05 10.05 0 015.71-2.29c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0l-3.29-3.29" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  )}
+                </svg>
+              </button>
             </div>
           </div>
           
@@ -726,29 +793,19 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-zinc-950 font-sans text-zinc-100 selection:bg-amber-500/30 print:hidden relative overflow-hidden">
+    <div className="flex h-screen bg-zinc-50 dark:bg-zinc-950 font-sans text-zinc-900 dark:text-zinc-100 selection:bg-amber-500/30 print:hidden relative overflow-hidden">
       
-      {notification && (
-        <div className={`fixed top-6 right-6 z-50 px-6 py-4 rounded-xl shadow-lg border text-[10px] uppercase font-bold tracking-widest flex items-center gap-3 transition-opacity duration-300 transform ${
-          notification.type === 'success' ? 'bg-zinc-900 border-green-500/50 text-green-400' :
-          notification.type === 'error' ? 'bg-zinc-900 border-red-500/50 text-red-400' :
-          notification.type === 'warning' ? 'bg-zinc-900 border-amber-500/50 text-amber-400' :
-          'bg-zinc-900 border-zinc-800 text-zinc-300'
-        }`}>
-          <span className={`w-2 h-2 rounded-full ${notification.type === 'success' ? 'bg-green-500' : notification.type === 'error' ? 'bg-red-500' : notification.type === 'warning' ? 'bg-amber-500' : 'bg-zinc-500'}`}></span>
-          {notification.message}
-        </div>
-      )}
+      {notificationElement}
 
       {confirmDialog && (
-        <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-[60] transition-opacity">
-          <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-sm w-full text-center">
+        <div className="fixed inset-0 bg-zinc-900/40 dark:bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-[60] transition-opacity">
+          <div className="bg-white dark:bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-w-sm w-full text-center">
             <div className="w-12 h-12 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-500/20">
                <svg className="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
             </div>
-            <h2 className="text-[11px] font-bold text-zinc-100 mb-6 uppercase tracking-widest leading-relaxed">{confirmDialog.message}</h2>
+            <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 mb-6 uppercase tracking-widest leading-relaxed">{confirmDialog.message}</h2>
             <div className="flex justify-center gap-3">
-              <button type="button" onClick={() => setConfirmDialog(null)} className="px-6 py-2.5 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-zinc-700 transition-colors shadow-sm">CANCEL</button>
+              <button type="button" onClick={() => setConfirmDialog(null)} className="px-6 py-2.5 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors shadow-sm">CANCEL</button>
               <button type="button" onClick={confirmDialog.onConfirm} className="px-6 py-2.5 bg-red-500/10 border border-red-500/20 text-red-500 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-red-500/20 transition-colors shadow-sm">CONFIRM</button>
             </div>
           </div>
@@ -756,17 +813,17 @@ export default function App() {
       )}
 
       {isAddingProduct && (
-        <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
-          <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-md w-full">
-            <h2 className="text-[11px] font-bold text-zinc-100 mb-6 tracking-widest uppercase">{editingProduct ? 'EDIT PRODUCT' : 'NEW PRODUCT'}</h2>
+        <div className="fixed inset-0 bg-zinc-900/40 dark:bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
+          <div className="bg-white dark:bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-w-md w-full">
+            <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 mb-6 tracking-widest uppercase">{editingProduct ? 'EDIT PRODUCT' : 'NEW PRODUCT'}</h2>
             <form onSubmit={handleSaveProduct} className="flex flex-col gap-5">
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">PRODUCT NAME</label>
-                <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="E.G. PREMIUM COFFEE" />
+                <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="E.G. PREMIUM COFFEE" />
               </div>
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">CATEGORY</label>
-                <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
+                <select value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
                   <option value="FOODS">FOODS</option>
                   <option value="DRINKS">DRINKS</option>
                   <option value="SUPPLIES">SUPPLIES</option>
@@ -776,40 +833,40 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">COST ({settings.currencySymbol})</label>
-                  <input required type="number" step="0.01" value={formData.cost} onChange={e => setFormData({...formData, cost: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="0.00" />
+                  <input required type="number" step="0.01" value={formData.cost} onChange={e => setFormData({...formData, cost: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="0.00" />
                 </div>
                 <div>
                   <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">PRICE ({settings.currencySymbol})</label>
-                  <input required type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="0.00" />
+                  <input required type="number" step="0.01" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="0.00" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">SKU / BARCODE</label>
-                  <input required type="text" value={formData.sku} onChange={e => setFormData({...formData, sku: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="SCAN OR TYPE" />
+                  <input required type="text" value={formData.sku} onChange={e => setFormData({...formData, sku: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="SCAN OR TYPE" />
                 </div>
                 {editingProduct ? (
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">CURRENT</label>
-                      <input type="number" value={formData.stock} disabled className="w-full bg-zinc-900 border border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-500 outline-none cursor-not-allowed" />
+                      <input type="number" value={formData.stock} disabled className="w-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-500 outline-none cursor-not-allowed" />
                     </div>
                     <div>
                       <label className="text-[10px] font-medium text-amber-500 mb-2 block uppercase tracking-widest">ADD STOCK</label>
-                      <input type="number" value={addStockAmount} onChange={e => setAddStockAmount(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-amber-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" placeholder="0" />
+                      <input type="number" value={addStockAmount} onChange={e => setAddStockAmount(e.target.value)} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-amber-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" placeholder="0" />
                     </div>
                   </div>
                 ) : (
                   <div>
                     <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">INITIAL STOCK</label>
-                    <input required type="number" value={formData.stock} onChange={e => setFormData({...formData, stock: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="0" />
+                    <input required type="number" value={formData.stock} onChange={e => setFormData({...formData, stock: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="0" />
                   </div>
                 )}
               </div>
               {editingProduct && parseInt(addStockAmount) > 0 && (
                 <div>
                   <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">REASON</label>
-                  <select value={stockAdjustmentReason} onChange={e => setStockAdjustmentReason(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
+                  <select value={stockAdjustmentReason} onChange={e => setStockAdjustmentReason(e.target.value)} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
                     <option value="RESTOCK">SUPPLIER RESTOCK</option>
                     <option value="DAMAGE">DAMAGED / SPOILED</option>
                     <option value="DISCREPANCY">AUDIT CORRECTION</option>
@@ -817,8 +874,8 @@ export default function App() {
                   </select>
                 </div>
               )}
-              <div className="flex justify-end gap-3 mt-2 pt-6 border-t border-zinc-800">
-                <button type="button" onClick={() => setIsAddingProduct(false)} className="px-5 py-2.5 text-[10px] uppercase tracking-widest font-bold text-zinc-300 hover:text-zinc-100 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 rounded-lg transition-colors shadow-sm">CANCEL</button>
+              <div className="flex justify-end gap-3 mt-2 pt-6 border-t border-zinc-200 dark:border-zinc-800">
+                <button type="button" onClick={() => setIsAddingProduct(false)} className="px-5 py-2.5 text-[10px] uppercase tracking-widest font-bold text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-100 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg transition-colors shadow-sm">CANCEL</button>
                 <button type="submit" className="px-6 py-2.5 bg-amber-500 text-zinc-950 rounded-lg text-[10px] uppercase tracking-widest font-bold hover:bg-amber-400 transition-colors shadow-sm">SAVE PRODUCT</button>
               </div>
             </form>
@@ -828,30 +885,48 @@ export default function App() {
 
       {isAddingUser && (
         <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
-          <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-sm w-full">
-            <h2 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase mb-6">ADD TEAM MEMBER</h2>
+          <div className="bg-white dark:bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-w-sm w-full">
+            <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase mb-6">ADD TEAM MEMBER</h2>
             <form onSubmit={handleSaveUser} className="space-y-5">
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">USERNAME</label>
-                <input required type="text" value={userFormData.username} onChange={e => setUserFormData({...userFormData, username: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="JOHNDOE" />
+                <input required type="text" value={userFormData.username} onChange={e => setUserFormData({...userFormData, username: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="JOHNDOE" />
               </div>
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">FULL NAME</label>
-                <input required type="text" value={userFormData.name} onChange={e => setUserFormData({...userFormData, name: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="JOHN DOE" />
+                <input required type="text" value={userFormData.name} onChange={e => setUserFormData({...userFormData, name: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="JOHN DOE" />
               </div>
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">PASSWORD</label>
-                <input required type="password" value={userFormData.password} onChange={e => setUserFormData({...userFormData, password: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-600" placeholder="CREATE PASSWORD" />
+                <div className="relative w-full">
+                  <input 
+                    required 
+                    type={showAddUserPassword ? "text" : "password"} 
+                    value={userFormData.password} 
+                    onChange={e => setUserFormData({...userFormData, password: e.target.value})} 
+                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
+                    placeholder="CREATE PASSWORD" 
+                  />
+                  <button type="button" onClick={() => setShowAddUserPassword(!showAddUserPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      {showAddUserPassword ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.29 3.29m0 0a10.05 10.05 0 015.71-2.29c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0l-3.29-3.29" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      )}
+                    </svg>
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">ROLE LEVEL</label>
-                <select value={userFormData.role} onChange={e => setUserFormData({...userFormData, role: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] uppercase tracking-widest font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
+                <select value={userFormData.role} onChange={e => setUserFormData({...userFormData, role: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] uppercase tracking-widest font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
                   <option value="cashier">CASHIER</option>
                   <option value="manager">STORE MANAGER</option>
                 </select>
               </div>
-              <div className="flex justify-end gap-3 pt-6 border-t border-zinc-800">
-                <button type="button" onClick={() => setIsAddingUser(false)} className="px-5 py-2.5 text-[10px] uppercase tracking-widest font-bold text-zinc-300 hover:text-zinc-100 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 rounded-lg transition-colors shadow-sm">CANCEL</button>
+              <div className="flex justify-end gap-3 pt-6 border-t border-zinc-200 dark:border-zinc-800">
+                <button type="button" onClick={() => { setIsAddingUser(false); setShowAddUserPassword(false); }} className="px-5 py-2.5 text-[10px] uppercase tracking-widest font-bold text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-100 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg transition-colors shadow-sm">CANCEL</button>
                 <button type="submit" className="px-6 py-2.5 bg-amber-500 text-zinc-950 rounded-lg text-[10px] uppercase tracking-widest font-bold hover:bg-amber-400 transition-colors shadow-sm">CREATE USER</button>
               </div>
             </form>
@@ -861,20 +936,57 @@ export default function App() {
 
       {isResetPasswordModalOpen && resetTargetUser && (
         <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
-          <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-sm w-full">
-            <h2 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase mb-2">RESET PASSWORD</h2>
-            <p className="text-[10px] font-medium text-zinc-500 mb-6 uppercase tracking-widest">UPDATING CREDENTIALS FOR <span className="text-zinc-100 font-bold">{resetTargetUser.name}</span></p>
+          <div className="bg-white dark:bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-w-sm w-full">
+            <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase mb-2">RESET PASSWORD</h2>
+            <p className="text-[10px] font-medium text-zinc-500 mb-6 uppercase tracking-widest">UPDATING CREDENTIALS FOR <span className="text-zinc-900 dark:text-zinc-100 font-bold">{resetTargetUser.name}</span></p>
             <form onSubmit={handleUpdatePassword} className="space-y-5">
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">NEW PASSWORD</label>
-                <input required type="password" value={resetPasswordData.newPassword} onChange={e => setResetPasswordData({...resetPasswordData, newPassword: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-600" placeholder="••••••••" autoFocus />
+                <div className="relative w-full">
+                  <input 
+                    required 
+                    type={showResetNewPassword ? "text" : "password"} 
+                    value={resetPasswordData.newPassword} 
+                    onChange={e => setResetPasswordData({...resetPasswordData, newPassword: e.target.value})} 
+                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
+                    placeholder="••••••••" 
+                    autoFocus 
+                  />
+                  <button type="button" onClick={() => setShowResetNewPassword(!showResetNewPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      {showResetNewPassword ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.29 3.29m0 0a10.05 10.05 0 015.71-2.29c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0l-3.29-3.29" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      )}
+                    </svg>
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">CONFIRM PASSWORD</label>
-                <input required type="password" value={resetPasswordData.confirmPassword} onChange={e => setResetPasswordData({...resetPasswordData, confirmPassword: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-600" placeholder="••••••••" />
+                <div className="relative w-full">
+                  <input 
+                    required 
+                    type={showResetConfirmPassword ? "text" : "password"} 
+                    value={resetPasswordData.confirmPassword} 
+                    onChange={e => setResetPasswordData({...resetPasswordData, confirmPassword: e.target.value})} 
+                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2 rounded-lg text-lg tracking-[0.2em] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors placeholder:tracking-widest placeholder:text-[10px] placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
+                    placeholder="••••••••" 
+                  />
+                  <button type="button" onClick={() => setShowResetConfirmPassword(!showResetConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      {showResetConfirmPassword ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.29 3.29m0 0a10.05 10.05 0 015.71-2.29c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0l-3.29-3.29" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      )}
+                    </svg>
+                  </button>
+                </div>
               </div>
-              <div className="flex justify-end gap-3 pt-6 border-t border-zinc-800">
-                <button type="button" onClick={() => { setIsResetPasswordModalOpen(false); setResetTargetUser(null); setResetPasswordData({newPassword:'', confirmPassword:''}); }} className="px-5 py-2.5 text-[10px] font-bold uppercase tracking-widest text-zinc-300 hover:text-zinc-100 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 rounded-lg transition-colors shadow-sm">CANCEL</button>
+              <div className="flex justify-end gap-3 pt-6 border-t border-zinc-200 dark:border-zinc-800">
+                <button type="button" onClick={() => { setIsResetPasswordModalOpen(false); setResetTargetUser(null); setResetPasswordData({newPassword:'', confirmPassword:''}); setShowResetNewPassword(false); setShowResetConfirmPassword(false); }} className="px-5 py-2.5 text-[10px] font-bold uppercase tracking-widest text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-zinc-100 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-lg transition-colors shadow-sm">CANCEL</button>
                 <button type="submit" className="px-6 py-2.5 bg-amber-500 text-zinc-950 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-amber-400 transition-colors shadow-sm">CONFIRM</button>
               </div>
             </form>
@@ -884,20 +996,20 @@ export default function App() {
 
       {isPrintModalOpen && (
         <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity print:hidden">
-          <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-lg w-full">
+          <div className="bg-white dark:bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-w-lg w-full">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase">PRINT BARCODES</h2>
-              <button type="button" onClick={() => setIsPrintModalOpen(false)} className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-100 transition-colors">CLOSE</button>
+              <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase">PRINT BARCODES</h2>
+              <button type="button" onClick={() => setIsPrintModalOpen(false)} className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">CLOSE</button>
             </div>
             <form onSubmit={generatePrintLabels} className="space-y-5">
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2 md:col-span-1">
                   <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">SEARCH CATALOG</label>
-                  <input type="text" value={printSearchQuery} onChange={e => setPrintSearchQuery(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="SEARCH BY NAME OR SKU..." />
+                  <input type="text" value={printSearchQuery} onChange={e => setPrintSearchQuery(e.target.value)} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" placeholder="SEARCH BY NAME OR SKU..." />
                 </div>
                 <div className="col-span-2 md:col-span-1">
                   <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">CATEGORY FILTER</label>
-                  <select value={printCategoryFilter} onChange={e => setPrintCategoryFilter(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
+                  <select value={printCategoryFilter} onChange={e => setPrintCategoryFilter(e.target.value)} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
                     <option value="ALL">ALL CATEGORIES</option>
                     <option value="FOODS">FOODS</option>
                     <option value="DRINKS">DRINKS</option>
@@ -908,7 +1020,7 @@ export default function App() {
               </div>
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">SELECT PRODUCT TO PRINT</label>
-                <select required value={printLabelData.sku} onChange={e => setPrintLabelData({...printLabelData, sku: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
+                <select required value={printLabelData.sku} onChange={e => setPrintLabelData({...printLabelData, sku: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer">
                   <option value="" disabled>-- CHOOSE AN ITEM --</option>
                   {filteredPrintLabelsList.map(item => (
                     <option key={item.sku} value={item.sku}>{item.name} - {item.sku}</option>
@@ -917,9 +1029,9 @@ export default function App() {
               </div>
               <div>
                 <label className="text-[10px] font-medium text-zinc-500 mb-2 block uppercase tracking-widest">LABELS QUANTITY (SHEET MODE)</label>
-                <input required type="number" min="1" max="1000" value={printLabelData.qty} onChange={e => setPrintLabelData({...printLabelData, qty: parseInt(e.target.value)||1})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" />
+                <input required type="number" min="1" max="1000" value={printLabelData.qty} onChange={e => setPrintLabelData({...printLabelData, qty: parseInt(e.target.value)||1})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors" />
               </div>
-              <div className="flex justify-end pt-6 border-t border-zinc-800">
+              <div className="flex justify-end pt-6 border-t border-zinc-200 dark:border-zinc-800">
                 <button type="submit" className="px-6 py-3 bg-amber-500 text-zinc-950 rounded-lg text-[10px] uppercase tracking-widest font-bold hover:bg-amber-400 transition-colors shadow-sm w-full">GENERATE SHEET</button>
               </div>
             </form>
@@ -928,19 +1040,19 @@ export default function App() {
       )}
 
       {printRequest && (
-        <div className="fixed inset-0 bg-zinc-950 z-50 overflow-y-auto print:bg-white print:block">
+        <div className="fixed inset-0 bg-white dark:bg-zinc-950 z-50 overflow-y-auto print:bg-white print:block">
           <div className="p-8 print:p-0 max-w-5xl mx-auto print:bg-white print:text-black">
             <div className="flex justify-between items-center mb-8 print:hidden">
-              <h2 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase">SHEET GENERATED</h2>
+              <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase">SHEET GENERATED</h2>
               <div className="flex gap-3">
-                <button type="button" onClick={() => setPrintRequest(null)} className="px-6 py-2.5 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg text-[10px] uppercase tracking-widest font-bold hover:bg-zinc-700 transition-colors shadow-sm">CANCEL</button>
+                <button type="button" onClick={() => setPrintRequest(null)} className="px-6 py-2.5 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 rounded-lg text-[10px] uppercase tracking-widest font-bold hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors shadow-sm">CANCEL</button>
                 <button type="button" onClick={() => window.print()} className="px-6 py-2.5 bg-amber-500 text-zinc-950 rounded-lg text-[10px] uppercase tracking-widest font-bold hover:bg-amber-400 transition-colors shadow-sm">PRINT SHEET</button>
               </div>
             </div>
             
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 print:grid-cols-4 print:gap-2 justify-items-center">
               {Array.from({ length: printRequest.qty }).map((_, i) => (
-                <div key={i} className="border border-dashed border-zinc-700 print:border-black p-3 w-[150px] flex flex-col items-center justify-center bg-white print:break-inside-avoid">
+                <div key={i} className="border border-dashed border-zinc-300 dark:border-zinc-700 print:border-black p-3 w-[150px] flex flex-col items-center justify-center bg-white print:break-inside-avoid">
                   <span className="text-[10px] font-bold text-black truncate w-full text-center mb-1 uppercase tracking-widest">{printRequest.product?.name || ''}</span>
                   <div className="flex justify-center w-full overflow-hidden scale-[0.8] origin-top"><Barcode value={printRequest.product?.sku || '0'} width={1.5} height={40} fontSize={12} displayValue={true} margin={0} background="transparent" /></div>
                   <span className="font-bold text-[10px] mt-1 text-black uppercase tracking-widest">{settings.currencySymbol}{(Number(printRequest.product?.price) || 0).toFixed(2)}</span>
@@ -953,8 +1065,8 @@ export default function App() {
 
       {receiptData && (
         <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center print:static print:bg-transparent print:block p-4 z-50 transition-opacity">
-          <div className="bg-zinc-900 p-6 rounded-xl shadow-2xl border border-zinc-800 max-w-sm w-full max-h-[90vh] overflow-y-auto print:max-h-none print:overflow-visible print:p-0 print:shadow-none print:m-0 print:w-full print:border-none print:bg-white custom-scrollbar">
-            <div className="flex justify-between items-center mb-5 print:hidden border-b border-zinc-800 pb-3">
+          <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-w-sm w-full max-h-[90vh] overflow-y-auto print:max-h-none print:overflow-visible print:p-0 print:shadow-none print:m-0 print:w-full print:border-none print:bg-white custom-scrollbar">
+            <div className="flex justify-between items-center mb-5 print:hidden border-b border-zinc-200 dark:border-zinc-800 pb-3">
               <h2 className="text-[10px] font-bold uppercase tracking-widest text-amber-500 flex items-center gap-1.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
                 TRANSACTION COMPLETE
@@ -1024,96 +1136,36 @@ export default function App() {
 
             <div className="mt-6 print:hidden flex gap-2">
               <button type="button" onClick={() => executePrint()} className="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors shadow-sm">PRINT COPY</button>
-              <button type="button" onClick={() => setReceiptData(null)} className="flex-1 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-zinc-300 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors shadow-sm">NEW SALE</button>
+              <button type="button" onClick={() => setReceiptData(null)} className="flex-1 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors shadow-sm">NEW SALE</button>
             </div>
           </div>
         </div>
       )}
 
-      {isCashModalOpen && (
-        <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
-          <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-sm w-full">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase">DRAWER OPERATION</h2>
-            </div>
-            <form onSubmit={handleCashAdjustmentSubmit} className="space-y-5">
-              <div className="flex gap-2 bg-zinc-950 p-1.5 rounded-lg border border-zinc-800">
-                <button type="button" onClick={() => setCashDropData({...cashDropData, type: 'IN'})} className={`flex-1 py-2.5 rounded-md text-[10px] font-bold uppercase tracking-widest transition-colors border ${cashDropData.type === 'IN' ? 'bg-zinc-800 text-amber-500 border-zinc-700 shadow-sm' : 'bg-transparent text-zinc-500 hover:bg-zinc-900 border-transparent shadow-none'}`}>CASH IN</button>
-                <button type="button" onClick={() => setCashDropData({...cashDropData, type: 'OUT'})} className={`flex-1 py-2.5 rounded-md text-[10px] font-bold uppercase tracking-widest transition-colors border ${cashDropData.type === 'OUT' ? 'bg-zinc-800 text-amber-500 border-zinc-700 shadow-sm' : 'bg-transparent text-zinc-500 hover:bg-zinc-900 border-transparent shadow-none'}`}>PAYOUT</button>
-              </div>
-              <div>
-                <label className="text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2 block">AMOUNT ({settings.currencySymbol})</label>
-                <input required type="number" step="0.01" value={cashDropData.amount} onChange={e => setCashDropData({...cashDropData, amount: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" placeholder="0.00" />
-              </div>
-              <div>
-                <label className="text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2 block">REASON / REFERENCE</label>
-                <input required type="text" value={cashDropData.reason} onChange={e => setCashDropData({...cashDropData, reason: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase shadow-sm" placeholder="E.G. WATER DELIVERY" />
-              </div>
-              <div className="flex justify-end gap-3 pt-6 border-t border-zinc-800">
-                <button type="button" onClick={() => setIsCashModalOpen(false)} className="px-5 py-2.5 text-[10px] font-bold uppercase tracking-widest text-zinc-300 hover:text-zinc-100 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 rounded-lg transition-colors shadow-sm">CANCEL</button>
-                <button type="submit" className="px-6 py-2.5 bg-amber-500 text-zinc-950 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-amber-400 transition-colors shadow-sm">CONFIRM</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {isResumeOpen && (
-        <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
-          <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-lg w-full">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase">SUSPENDED CARTS</h2>
-              <button type="button" onClick={() => setIsResumeOpen(false)} className="text-[10px] uppercase tracking-widest font-bold text-zinc-500 hover:text-zinc-100 transition-colors">CLOSE</button>
-            </div>
-            <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
-              {heldCarts.map((h, i) => (
-                <div key={h.id} className="bg-zinc-950 border border-zinc-800 p-4 rounded-xl flex justify-between items-center hover:border-zinc-700 transition-colors shadow-sm">
-                  <div>
-                    <div className="flex items-center gap-3 mb-1">
-                      <p className="text-[11px] font-bold uppercase tracking-wider text-zinc-100">CART #{i + 1}</p>
-                      <span className="bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 text-[10px] font-mono font-bold tracking-widest">{new Date(h.id).toLocaleTimeString()}</span>
-                    </div>
-                    <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">{h.cart.length} ITEM{h.cart.length !== 1 && 'S'} • {settings.currencySymbol}{h.cart.reduce((s, c) => s + ((Number(c.price)||0) * (Number(c.qty)||0)), 0).toFixed(2)}</p>
-                  </div>
-                  <button type="button" onClick={() => handleResumeCart(i)} className="bg-amber-500 text-zinc-950 px-5 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-amber-400 transition-colors shadow-sm">RESUME</button>
-                </div>
-              ))}
-              {heldCarts.length === 0 && (
-                <div className="py-12 flex flex-col items-center justify-center text-zinc-600">
-                  <svg className="w-12 h-12 mb-3 text-zinc-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
-                  <p className="text-[10px] font-bold uppercase tracking-widest">NO SUSPENDED CARTS.</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* SIDEBAR */}
-      <div className="w-64 bg-zinc-950 flex flex-col border-r border-zinc-800 z-10 shadow-sm">
-        <div className="px-6 py-6 flex items-center gap-3 border-b border-zinc-900">
+      <div className="w-64 bg-white dark:bg-zinc-950 flex flex-col border-r border-zinc-200 dark:border-zinc-800 z-10 shadow-sm">
+        <div className="px-6 py-6 flex items-center gap-3 border-b border-zinc-200 dark:border-zinc-900">
           <div className="w-8 h-8 bg-amber-500 rounded-lg flex items-center justify-center text-zinc-950 font-bold shrink-0 shadow-sm">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
           </div>
-          <h1 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase truncate" title={settings.storeName}>{settings.storeName}</h1>
+          <h1 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase truncate" title={settings.storeName}>{settings.storeName}</h1>
         </div>
         
-        <div className="px-6 py-4 border-b border-zinc-900 flex items-center gap-3 bg-zinc-950">
-          <div className="w-8 h-8 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-100 text-[11px] font-bold uppercase shrink-0 border border-zinc-800 shadow-sm">
+        <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-900 flex items-center gap-3 bg-white dark:bg-zinc-950">
+          <div className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center text-zinc-900 dark:text-zinc-100 text-[11px] font-bold uppercase shrink-0 border border-zinc-200 dark:border-zinc-800 shadow-sm">
             {currentUser.name.charAt(0)}
           </div>
           <div className="flex flex-col min-w-0">
-            <span className="text-[10px] font-bold text-zinc-100 uppercase truncate tracking-widest">{currentUser.name}</span>
+            <span className="text-[10px] font-bold text-zinc-900 dark:text-zinc-100 uppercase truncate tracking-widest">{currentUser.name}</span>
             <span className="text-[9px] text-amber-500 font-bold uppercase tracking-widest truncate">{currentUser.role}</span>
           </div>
         </div>
 
-        <nav className="flex-1 px-4 py-6 space-y-6 overflow-y-auto custom-scrollbar bg-zinc-950">
+        <nav className="flex-1 px-4 py-6 space-y-6 overflow-y-auto custom-scrollbar bg-white dark:bg-zinc-950">
           {MENU_GROUPS.map((group, idx) => {
             if (!group.roles.includes(currentUser.role)) return null;
             return (
               <div key={idx}>
-                <p className="px-3 text-[10px] uppercase tracking-widest text-zinc-600 font-bold mb-2">{group.title}</p>
+                <p className="px-3 text-[10px] uppercase tracking-widest text-zinc-500 dark:text-zinc-600 font-bold mb-2">{group.title}</p>
                 <div className="space-y-0.5">
                   {group.items.map(item => (
                     <button 
@@ -1123,10 +1175,10 @@ export default function App() {
                       className={`w-full text-left px-3 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors flex items-center gap-2.5 ${
                         activeView === item.id 
                         ? 'bg-amber-500/10 text-amber-500 shadow-sm border border-amber-500/20' 
-                        : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100 border border-transparent'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-100 border border-transparent'
                       }`}
                     >
-                      <svg className={`w-4 h-4 ${activeView === item.id ? 'text-amber-500' : 'text-zinc-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={item.icon}></path></svg>
+                      <svg className={`w-4 h-4 ${activeView === item.id ? 'text-amber-500' : 'text-zinc-400 dark:text-zinc-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={item.icon}></path></svg>
                       {item.label}
                     </button>
                   ))}
@@ -1136,28 +1188,27 @@ export default function App() {
           })}
         </nav>
 
-        <div className="p-4 border-t border-zinc-900 space-y-2 bg-zinc-950">
+        <div className="p-4 border-t border-zinc-200 dark:border-zinc-900 space-y-2 bg-white dark:bg-zinc-950">
           {activeShift && currentUser.role === 'manager' && (
-             <button type="button" onClick={() => setActiveView('zreading')} className="w-full py-2.5 bg-zinc-900 hover:bg-red-500/10 text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border border-red-500/20 shadow-sm">
+             <button type="button" onClick={() => setActiveView('zreading')} className="w-full py-2.5 bg-zinc-50 dark:bg-zinc-900 hover:bg-red-500/10 text-red-500 dark:text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border border-red-500/20 shadow-sm">
                END SHIFT (Z-READ)
              </button>
           )}
-          <button type="button" onClick={handleLogout} disabled={activeShift && activeShift.opened_by !== currentUser.name && currentUser.role !== 'manager'} className="w-full py-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border border-zinc-800 shadow-sm disabled:opacity-50">
+          <button type="button" onClick={handleLogout} disabled={activeShift && activeShift.opened_by !== currentUser.name && currentUser.role !== 'manager'} className="w-full py-2.5 bg-zinc-50 dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border border-zinc-200 dark:border-zinc-800 shadow-sm disabled:opacity-50">
             LOCK SYSTEM
           </button>
         </div>
       </div>
 
-      {/* MAIN CONTENT AREA */}
-      <div className="flex-1 flex flex-col overflow-hidden relative z-10 bg-zinc-950">
-        <header className="bg-zinc-900 px-8 py-5 flex justify-between items-end z-10 sticky top-0 border-b border-zinc-800 shadow-sm">
-          <h2 className="text-[11px] font-bold text-zinc-100 uppercase tracking-widest">
+      <div className="flex-1 flex flex-col overflow-hidden relative z-10 bg-zinc-50 dark:bg-zinc-950">
+        <header className="bg-white dark:bg-zinc-900 px-8 py-5 flex justify-between items-end z-10 sticky top-0 border-b border-zinc-200 dark:border-zinc-800 shadow-sm">
+          <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 uppercase tracking-widest">
             {MENU_GROUPS.flatMap(g => g.items).find(i => i.id === activeView)?.label || activeView}
           </h2>
           {activeShift && activeView !== 'zreading' && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-green-500/10 border border-green-500/20 shadow-sm">
               <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-              <span className="text-[10px] font-bold uppercase tracking-widest text-green-400">REGISTER OPEN</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-green-500 dark:text-green-400">REGISTER OPEN</span>
             </div>
           )}
         </header>
@@ -1168,73 +1219,77 @@ export default function App() {
             <div className="max-w-6xl mx-auto space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
-                <div className="bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-sm">
+                <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">GROSS REVENUE</p>
-                  <h3 className="text-3xl font-bold text-zinc-100 tracking-tight">{settings.currencySymbol}{todayRevenue.toLocaleString(undefined, {minimumFractionDigits: 2})}</h3>
+                  <h3 className="text-3xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">{settings.currencySymbol}{todayRevenue.toLocaleString(undefined, {minimumFractionDigits: 2})}</h3>
                 </div>
                 
-                <div className="bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-sm">
+                <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">NET PROFIT</p>
-                  <h3 className="text-3xl font-bold text-zinc-100 tracking-tight">{settings.currencySymbol}{todayProfit.toLocaleString(undefined, {minimumFractionDigits: 2})}</h3>
+                  <h3 className="text-3xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">{settings.currencySymbol}{todayProfit.toLocaleString(undefined, {minimumFractionDigits: 2})}</h3>
                 </div>
 
-                <div className="bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-sm">
+                <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">TOTAL TRANSACTIONS</p>
-                  <h3 className="text-3xl font-bold text-zinc-100 tracking-tight">{todaysSales.length}</h3>
+                  <h3 className="text-3xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">{todaysSales.length}</h3>
                 </div>
 
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 
-                <div className="bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-sm">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-100 mb-6">REVENUE TREND (CURRENT WEEK)</h3>
+                <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100 mb-6">REVENUE TREND (CURRENT WEEK)</h3>
                   <div className="w-full h-full min-h-[300px]">
                     {barData.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={barData} margin={{top:10, right:10, left:-20, bottom:0}}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
+                        <AreaChart data={barData} margin={{top:10, right:10, left:-20, bottom:20}}>
+                          <defs>
+                            <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.5}/>
+                              <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={theme === 'dark' ? "#27272a" : "#e4e4e7"} />
                           <XAxis dataKey="name" fontSize={10} tickLine={false} axisLine={false} tick={{fill: '#a1a1aa', fontWeight: 500}} dy={10} />
-                          <Tooltip cursor={{fill: '#27272a'}} contentStyle={{ backgroundColor: '#18181b', borderRadius: '8px', border: '1px solid #3f3f46', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', color: '#f4f4f5', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.05em' }} />
-                          <Bar dataKey="Revenue" fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={40} />
-                        </BarChart>
+                          <Tooltip cursor={{stroke: theme === 'dark' ? '#3f3f46' : '#e4e4e7', strokeWidth: 1}} contentStyle={{ backgroundColor: theme === 'dark' ? '#18181b' : '#ffffff', borderRadius: '8px', border: theme === 'dark' ? '1px solid #3f3f46' : '1px solid #e4e4e7', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', color: theme === 'dark' ? '#f4f4f5' : '#18181b', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.05em' }} />
+                          <Area type="monotone" dataKey="Revenue" stroke="#f59e0b" strokeWidth={3} fillOpacity={1} fill="url(#colorRev)" />
+                        </AreaChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="h-full flex flex-col items-center justify-center text-zinc-600">
+                      <div className="h-full flex flex-col items-center justify-center text-zinc-500 dark:text-zinc-600">
                         <p className="text-[10px] font-bold uppercase tracking-widest">AWAITING DATA</p>
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-sm">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-100 mb-6">TOP CASHIERS (TODAY)</h3>
+                <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100 mb-6">WEEKLY CASHIER PERFORMANCE</h3>
                   <div className="w-full h-full min-h-[300px]">
-                    {cashierData.length > 0 ? (
+                    {dailyCashierData.length > 0 && topCashiers.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={cashierData.slice(0,5)} margin={{top:10, right:10, left:-20, bottom:0}}>
-                          <defs>
-                            <linearGradient id="colorCashier" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                              <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                            </linearGradient>
-                          </defs>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
-                          <XAxis dataKey="name" fontSize={10} tickLine={false} axisLine={false} tick={{fill: '#a1a1aa', fontWeight: 500}} dy={10} tickFormatter={(val) => val.split(' ')[0]} />
-                          <Tooltip cursor={{stroke: '#3f3f46', strokeWidth: 1}} contentStyle={{ backgroundColor: '#18181b', borderRadius: '8px', border: '1px solid #3f3f46', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', color: '#f4f4f5', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.05em' }} />
-                          <Area type="monotone" dataKey="Revenue" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorCashier)" />
-                        </AreaChart>
+                        <BarChart data={dailyCashierData} margin={{top:10, right:10, left:-20, bottom:20}}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={theme === 'dark' ? "#27272a" : "#e4e4e7"} />
+                          <XAxis dataKey="name" fontSize={10} tickLine={false} axisLine={false} tick={{fill: '#a1a1aa', fontWeight: 500}} dy={10} />
+                          <Tooltip 
+                            cursor={{fill: theme === 'dark' ? '#27272a' : '#f4f4f5'}} 
+                            contentStyle={{ backgroundColor: theme === 'dark' ? '#18181b' : '#ffffff', borderRadius: '8px', border: theme === 'dark' ? '1px solid #3f3f46' : '1px solid #e4e4e7', color: theme === 'dark' ? '#f4f4f5' : '#18181b', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.05em' }} 
+                          />
+                          <Bar dataKey={topCashiers[0]} fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                          {topCashiers[1] && <Bar dataKey={topCashiers[1]} fill="#52525b" radius={[4, 4, 0, 0]} maxBarSize={40} />}
+                        </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="h-full flex flex-col items-center justify-center text-zinc-600">
-                        <p className="text-[10px] font-bold uppercase tracking-widest">NO SALES RECORDED TODAY.</p>
+                      <div className="h-full flex flex-col items-center justify-center text-zinc-500 dark:text-zinc-600">
+                        <p className="text-[10px] font-bold uppercase tracking-widest">AWAITING DATA</p>
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="lg:col-span-2 bg-zinc-900 p-6 rounded-xl border border-zinc-800 shadow-sm">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-100 mb-6">TOP SELLING CATEGORIES (ALL TIME)</h3>
+                <div className="lg:col-span-2 bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100 mb-6">TOP SELLING CATEGORIES (ALL TIME)</h3>
                   <div className="w-full h-full min-h-[300px]">
                     {pieData.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
@@ -1242,11 +1297,11 @@ export default function App() {
                           <Pie data={pieData.slice(0,5)} cx="50%" cy="50%" innerRadius={80} outerRadius={120} paddingAngle={2} dataKey="value" stroke="none">
                             {pieData.map((e, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                           </Pie>
-                          <Tooltip cursor={false} contentStyle={{ backgroundColor: '#18181b', borderRadius: '8px', border: '1px solid #3f3f46', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', color: '#f4f4f5', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.05em' }} />
+                          <Tooltip cursor={false} contentStyle={{ backgroundColor: theme === 'dark' ? '#18181b' : '#ffffff', borderRadius: '8px', border: theme === 'dark' ? '1px solid #3f3f46' : '1px solid #e4e4e7', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', color: theme === 'dark' ? '#f4f4f5' : '#18181b', fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.05em' }} />
                         </PieChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="h-full flex flex-col items-center justify-center text-zinc-600">
+                      <div className="h-full flex flex-col items-center justify-center text-zinc-500 dark:text-zinc-600">
                         <p className="text-[10px] font-bold uppercase tracking-widest">AWAITING DATA</p>
                       </div>
                     )}
@@ -1260,10 +1315,31 @@ export default function App() {
           {activeView === 'settings' && (
             <div className="max-w-4xl mx-auto space-y-6">
               
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-sm">
-                <div className="flex items-center gap-2 mb-6 border-b border-zinc-800 pb-4">
-                  <svg className="w-4 h-4 text-zinc-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-100">BUSINESS PROFILE</h3>
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-8 shadow-sm">
+                <div className="flex items-center gap-2 mb-6 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+                  <svg className="w-4 h-4 text-zinc-900 dark:text-zinc-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100">APPEARANCE</h3>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div>
+                    <label className="block text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2">SYSTEM THEME</label>
+                    <select 
+                      value={theme} 
+                      onChange={e => setTheme(e.target.value)} 
+                      className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-3 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer uppercase tracking-widest shadow-sm"
+                    >
+                      <option value="dark">DARK MODE</option>
+                      <option value="light">LIGHT MODE</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-8 shadow-sm">
+                <div className="flex items-center gap-2 mb-6 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+                  <svg className="w-4 h-4 text-zinc-900 dark:text-zinc-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100">BUSINESS PROFILE</h3>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -1274,7 +1350,7 @@ export default function App() {
                         type="text" 
                         value={settings.storeName} 
                         onChange={e => setSettings({...settings, storeName: e.target.value})} 
-                        className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase tracking-widest shadow-sm" 
+                        className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase tracking-widest shadow-sm" 
                       />
                     </div>
                     <div>
@@ -1283,7 +1359,7 @@ export default function App() {
                         type="text" 
                         value={settings.storeAddress} 
                         onChange={e => setSettings({...settings, storeAddress: e.target.value})} 
-                        className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase tracking-widest shadow-sm" 
+                        className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase tracking-widest shadow-sm" 
                       />
                     </div>
                     <div>
@@ -1292,7 +1368,7 @@ export default function App() {
                         type="text" 
                         value={settings.contactNumber} 
                         onChange={e => setSettings({...settings, contactNumber: e.target.value})} 
-                        className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase tracking-widest shadow-sm" 
+                        className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase tracking-widest shadow-sm" 
                       />
                     </div>
                     <div>
@@ -1301,7 +1377,7 @@ export default function App() {
                         type="text" 
                         value={settings.receiptFooter} 
                         onChange={e => setSettings({...settings, receiptFooter: e.target.value})} 
-                        className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase tracking-widest shadow-sm" 
+                        className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase tracking-widest shadow-sm" 
                       />
                     </div>
                   </div>
@@ -1313,7 +1389,7 @@ export default function App() {
                         <select 
                           value={settings.currencySymbol} 
                           onChange={e => setSettings({...settings, currencySymbol: e.target.value})} 
-                          className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer uppercase tracking-widest shadow-sm"
+                          className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer uppercase tracking-widest shadow-sm"
                         >
                           <option value="₱">PHP (₱)</option>
                           <option value="$">USD ($)</option>
@@ -1329,7 +1405,7 @@ export default function App() {
                           max="100"
                           value={settings.vatRate} 
                           onChange={e => setSettings({...settings, vatRate: Number(e.target.value)})} 
-                          className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" 
+                          className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" 
                         />
                       </div>
                     </div>
@@ -1341,25 +1417,25 @@ export default function App() {
                         min="1"
                         value={settings.lowStockThreshold} 
                         onChange={e => setSettings({...settings, lowStockThreshold: Number(e.target.value)})} 
-                        className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" 
+                        className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" 
                       />
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-sm">
-                <div className="flex items-center gap-2 mb-6 border-b border-zinc-800 pb-4">
-                  <svg className="w-4 h-4 text-zinc-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-100">HARDWARE INTEGRATION</h3>
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-8 shadow-sm">
+                <div className="flex items-center gap-2 mb-6 border-b border-zinc-200 dark:border-zinc-800 pb-4">
+                  <svg className="w-4 h-4 text-zinc-900 dark:text-zinc-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100">HARDWARE INTEGRATION</h3>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-6">
                     <div>
                       <label className="block text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2">BARCODE SCANNER</label>
-                      <div className="w-full bg-green-500/10 border border-green-500/20 px-4 py-3 rounded-lg flex items-center justify-between shadow-sm">
-                        <span className="text-[10px] font-bold uppercase tracking-widest text-green-400">KEYBOARD EMULATION</span>
+                      <div className="w-full bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 px-4 py-3 rounded-lg flex items-center justify-between shadow-sm">
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-green-600 dark:text-green-400">KEYBOARD EMULATION</span>
                         <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
                       </div>
                     </div>
@@ -1369,7 +1445,7 @@ export default function App() {
                       <button 
                         type="button"
                         onClick={() => setSettings({...settings, kickDrawer: !settings.kickDrawer})}
-                        className={`w-full px-4 py-3 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border flex justify-between items-center shadow-sm ${settings.kickDrawer ? 'bg-amber-500 border-amber-500 text-zinc-950' : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'}`}
+                        className={`w-full px-4 py-3 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border flex justify-between items-center shadow-sm ${settings.kickDrawer ? 'bg-amber-500 border-amber-500 text-zinc-950' : 'bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'}`}
                       >
                         {settings.kickDrawer ? 'ENABLED (VIA PRINTER)' : 'DISABLED'}
                       </button>
@@ -1382,7 +1458,7 @@ export default function App() {
                       <select 
                         value={settings.printerName} 
                         onChange={e => setSettings({...settings, printerName: e.target.value})} 
-                        className="w-full bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-lg text-[10px] font-medium text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer uppercase tracking-widest shadow-sm"
+                        className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-3 rounded-lg text-[10px] font-medium text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors cursor-pointer uppercase tracking-widest shadow-sm"
                       >
                         <option value="NONE">NO PRINTER CONFIGURED</option>
                         {systemPrinters.map(p => (
@@ -1396,7 +1472,7 @@ export default function App() {
                       <button 
                         type="button"
                         onClick={() => setSettings({...settings, autoPrint: !settings.autoPrint})}
-                        className={`w-full px-4 py-3 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border flex justify-between items-center shadow-sm ${settings.autoPrint ? 'bg-amber-500 border-amber-500 text-zinc-950' : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'}`}
+                        className={`w-full px-4 py-3 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border flex justify-between items-center shadow-sm ${settings.autoPrint ? 'bg-amber-500 border-amber-500 text-zinc-950' : 'bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'}`}
                         disabled={settings.printerName === 'NONE'}
                       >
                         {settings.autoPrint ? 'SILENT PRINTING ACTIVE' : 'SYSTEM DEFAULT PRINT DIALOG'}
@@ -1417,7 +1493,7 @@ export default function App() {
                       type="button"
                       key={cat}
                       onClick={() => setInventoryCategoryFilter(cat)}
-                      className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border ${inventoryCategoryFilter === cat ? 'bg-amber-500 text-zinc-950 border-amber-500 shadow-sm' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 shadow-sm'}`}
+                      className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border ${inventoryCategoryFilter === cat ? 'bg-amber-500 text-zinc-950 border-amber-500 shadow-sm' : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100 shadow-sm'}`}
                     >
                       {cat}
                     </button>
@@ -1431,17 +1507,17 @@ export default function App() {
                       placeholder="SEARCH CATALOG..." 
                       value={inventorySearchQuery} 
                       onChange={e => setInventorySearchQuery(e.target.value)} 
-                      className="w-64 pl-9 pr-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-100 transition-colors shadow-sm placeholder:text-zinc-600" 
+                      className="w-64 pl-9 pr-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors shadow-sm placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
                     />
                   </div>
-                  <button type="button" onClick={() => setIsPrintModalOpen(true)} className="bg-zinc-800 border border-zinc-700 text-zinc-100 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-zinc-700 whitespace-nowrap shadow-sm">PRINT BARCODES</button>
+                  <button type="button" onClick={() => setIsPrintModalOpen(true)} className="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-700 whitespace-nowrap shadow-sm">PRINT BARCODES</button>
                   <button type="button" onClick={() => setIsAddingProduct(true)} className="bg-amber-500 text-zinc-950 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-amber-400 whitespace-nowrap shadow-sm">ADD PRODUCT</button>
                 </div>
               </div>
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-sm overflow-hidden flex flex-col">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden flex flex-col">
                 <div className="flex-1 overflow-x-auto">
                   <table className="w-full text-left">
-                    <thead className="bg-zinc-950 border-b border-zinc-800">
+                    <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
                       <tr>
                         <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">SKU</th>
                         <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">PRODUCT NAME</th>
@@ -1451,18 +1527,18 @@ export default function App() {
                         <th className="px-6 py-3 text-right text-[10px] font-bold text-zinc-500 uppercase tracking-widest">ACTIONS</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-zinc-800">
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                       {paginatedInventory.map((item) => (
-                        <tr key={item.id} className="hover:bg-zinc-800/50 transition-colors">
-                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{item.sku}</td>
-                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{item.name}</td>
-                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{item.category}</td>
+                        <tr key={item.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{item.sku}</td>
+                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{item.name}</td>
+                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{item.category}</td>
                           <td className="px-6 py-3">
-                            <span className={`px-2 py-1 rounded-md text-[10px] font-medium uppercase tracking-widest border ${(Number(item.stock)||0) <= settings.lowStockThreshold ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-zinc-800/50 text-zinc-300 border-zinc-700'}`}>
+                            <span className={`px-2 py-1 rounded-md text-[10px] font-medium uppercase tracking-widest border ${(Number(item.stock)||0) <= settings.lowStockThreshold ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 border-red-200 dark:border-red-500/20' : 'bg-zinc-100 dark:bg-zinc-800/50 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'}`}>
                               {(Number(item.stock)||0)}
                             </span>
                           </td>
-                          <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-300">{settings.currencySymbol}{(Number(item.price)||0).toFixed(2)}</td>
+                          <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{settings.currencySymbol}{(Number(item.price)||0).toFixed(2)}</td>
                           <td className="px-6 py-3 flex justify-end gap-3">
                             <button type="button" onClick={() => { setEditingProduct(item); setFormData(item); setIsAddingProduct(true); }} className="text-zinc-500 hover:text-amber-500 transition-colors p-1" title="Edit">
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
@@ -1474,17 +1550,17 @@ export default function App() {
                         </tr>
                       ))}
                       {paginatedInventory.length === 0 && (
-                        <tr><td colSpan="6" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-600">NO PRODUCTS FOUND.</td></tr>
+                        <tr><td colSpan="6" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-600">NO PRODUCTS FOUND.</td></tr>
                       )}
                     </tbody>
                   </table>
                 </div>
                 {invTotalPages > 1 && (
-                  <div className="flex justify-between items-center px-6 py-3 bg-zinc-950 border-t border-zinc-800">
+                  <div className="flex justify-between items-center px-6 py-3 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">PAGE {inventoryPage} OF {invTotalPages}</span>
                     <div className="flex gap-2">
-                      <button type="button" disabled={inventoryPage === 1} onClick={() => setInventoryPage(inventoryPage - 1)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-800 transition-colors shadow-sm">PREV</button>
-                      <button type="button" disabled={inventoryPage === invTotalPages} onClick={() => setInventoryPage(inventoryPage + 1)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-800 transition-colors shadow-sm">NEXT</button>
+                      <button type="button" disabled={inventoryPage === 1} onClick={() => setInventoryPage(inventoryPage - 1)} className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shadow-sm">PREV</button>
+                      <button type="button" disabled={inventoryPage === invTotalPages} onClick={() => setInventoryPage(inventoryPage + 1)} className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shadow-sm">NEXT</button>
                     </div>
                   </div>
                 )}
@@ -1497,21 +1573,21 @@ export default function App() {
               
               <div className="flex-1 flex flex-col space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                  <div className="bg-zinc-900 p-5 rounded-xl border border-zinc-800 shadow-sm">
+                  <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-1">TOTAL VALUE</p>
-                    <p className="text-xl font-bold text-zinc-100 tracking-tight">{settings.currencySymbol}{totalInventoryValue.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+                    <p className="text-xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">{settings.currencySymbol}{totalInventoryValue.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
                   </div>
-                  <div className="bg-zinc-900 p-5 rounded-xl border border-zinc-800 shadow-sm">
+                  <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-1">UNIQUE ITEMS</p>
-                    <p className="text-xl font-bold text-zinc-100 tracking-tight">{filteredStocksView.length}</p>
+                    <p className="text-xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">{filteredStocksView.length}</p>
                   </div>
-                  <div className="bg-zinc-900 p-5 rounded-xl border border-zinc-800 shadow-sm">
+                  <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-red-500 mb-1">OUT OF STOCK</p>
-                    <p className="text-xl font-bold text-red-400 tracking-tight">{outOfStockCount}</p>
+                    <p className="text-xl font-bold text-red-600 dark:text-red-400 tracking-tight">{outOfStockCount}</p>
                   </div>
-                  <div className="bg-zinc-900 p-5 rounded-xl border border-zinc-800 shadow-sm">
+                  <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-amber-500 mb-1">LOW STOCK</p>
-                    <p className="text-xl font-bold text-amber-400 tracking-tight">{lowStockCount}</p>
+                    <p className="text-xl font-bold text-amber-500 dark:text-amber-400 tracking-tight">{lowStockCount}</p>
                   </div>
                 </div>
 
@@ -1526,7 +1602,7 @@ export default function App() {
                           placeholder="SEARCH STOCKS..." 
                           value={stocksSearchQuery} 
                           onChange={e => setStocksSearchQuery(e.target.value)} 
-                          className="w-64 pl-9 pr-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-100 transition-colors shadow-sm placeholder:text-zinc-600" 
+                          className="w-64 pl-9 pr-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors shadow-sm placeholder:text-zinc-400 dark:placeholder:text-zinc-600" 
                         />
                       </div>
                     </div>
@@ -1538,7 +1614,7 @@ export default function App() {
                             type="button"
                             key={cat}
                             onClick={() => setStocksCategoryFilter(cat)}
-                            className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border ${stocksCategoryFilter === cat ? 'bg-amber-500 text-zinc-950 border-amber-500 shadow-sm' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 shadow-sm'}`}
+                            className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border ${stocksCategoryFilter === cat ? 'bg-amber-500 text-zinc-950 border-amber-500 shadow-sm' : 'bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100 shadow-sm'}`}
                           >
                             {cat}
                           </button>
@@ -1547,15 +1623,15 @@ export default function App() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => downloadCSV(filteredStocksView, ['sku', 'name', 'category', 'cost', 'price', 'stock'], 'Inventory_Stocks_Report.csv')} className="bg-zinc-800 border border-zinc-700 text-zinc-100 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-zinc-700 whitespace-nowrap shadow-sm">EXPORT CSV</button>
+                    <button type="button" onClick={() => downloadCSV(filteredStocksView, ['sku', 'name', 'category', 'cost', 'price', 'stock'], 'Inventory_Stocks_Report.csv')} className="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-700 whitespace-nowrap shadow-sm">EXPORT CSV</button>
                     <button type="button" onClick={() => window.print()} className="bg-amber-500 text-zinc-950 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-amber-400 whitespace-nowrap shadow-sm">PRINT REPORT</button>
                   </div>
                 </div>
 
-                <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-sm overflow-hidden flex flex-col flex-1">
+                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden flex flex-col flex-1">
                   <div className="flex-1 overflow-x-auto">
                     <table className="w-full text-left">
-                      <thead className="bg-zinc-950 border-b border-zinc-800">
+                      <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
                         <tr>
                           <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">SKU</th>
                           <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">PRODUCT NAME</th>
@@ -1566,43 +1642,43 @@ export default function App() {
                           <th className="px-6 py-3 text-center text-[10px] font-bold text-zinc-500 uppercase tracking-widest">STATUS</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-zinc-800">
+                      <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                         {paginatedStocks.map((item) => {
                           const stock = Number(item.stock) || 0;
                           const cost = Number(item.cost) || 0;
                           const totalVal = stock * cost;
                           return (
-                            <tr key={item.id} className="hover:bg-zinc-800/50 transition-colors">
-                              <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{item.sku}</td>
-                              <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{item.name}</td>
-                              <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{item.category}</td>
-                              <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-300">{settings.currencySymbol}{cost.toFixed(2)}</td>
-                              <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-100">{stock}</td>
-                              <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-100">{settings.currencySymbol}{totalVal.toFixed(2)}</td>
+                            <tr key={item.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                              <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{item.sku}</td>
+                              <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{item.name}</td>
+                              <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{item.category}</td>
+                              <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{settings.currencySymbol}{cost.toFixed(2)}</td>
+                              <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100">{stock}</td>
+                              <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100">{settings.currencySymbol}{totalVal.toFixed(2)}</td>
                               <td className="px-6 py-3 flex justify-center">
                                 {stock <= 0 ? (
-                                  <span className="bg-red-500/10 text-red-400 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-widest border border-red-500/20">OUT OF STOCK</span>
+                                  <span className="bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-widest border border-red-200 dark:border-red-500/20">OUT OF STOCK</span>
                                 ) : stock <= settings.lowStockThreshold ? (
-                                  <span className="bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-widest border border-amber-500/20">LOW STOCK</span>
+                                  <span className="bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-widest border border-amber-200 dark:border-amber-500/20">LOW STOCK</span>
                                 ) : (
-                                  <span className="bg-green-500/10 text-green-400 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-widest border border-green-500/20">IN STOCK</span>
+                                  <span className="bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-widest border border-green-200 dark:border-green-500/20">IN STOCK</span>
                                 )}
                               </td>
                             </tr>
                           );
                         })}
                         {paginatedStocks.length === 0 && (
-                          <tr><td colSpan="7" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-600">NO STOCK RECORDS FOUND.</td></tr>
+                          <tr><td colSpan="7" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-600">NO STOCK RECORDS FOUND.</td></tr>
                         )}
                       </tbody>
                     </table>
                   </div>
                   {stocksTotalPages > 1 && (
-                    <div className="flex justify-between items-center px-6 py-3 bg-zinc-950 border-t border-zinc-800">
+                    <div className="flex justify-between items-center px-6 py-3 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800">
                       <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">PAGE {stocksPage} OF {stocksTotalPages}</span>
                       <div className="flex gap-2">
-                        <button type="button" disabled={stocksPage === 1} onClick={() => setStocksPage(stocksPage - 1)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-800 transition-colors shadow-sm">PREV</button>
-                        <button type="button" disabled={stocksPage === stocksTotalPages} onClick={() => setStocksPage(stocksPage + 1)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-800 transition-colors shadow-sm">NEXT</button>
+                        <button type="button" disabled={stocksPage === 1} onClick={() => setStocksPage(stocksPage - 1)} className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shadow-sm">PREV</button>
+                        <button type="button" disabled={stocksPage === stocksTotalPages} onClick={() => setStocksPage(stocksPage + 1)} className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shadow-sm">NEXT</button>
                       </div>
                     </div>
                   )}
@@ -1611,22 +1687,21 @@ export default function App() {
 
               <div className="w-72 flex flex-col space-y-6 shrink-0">
                 
-                {/* Out of Stock Persistent Panel */}
-                <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-sm p-5 flex flex-col max-h-[40vh]">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-red-500 mb-3 border-b border-zinc-800 pb-2 flex items-center gap-2">
+                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm p-5 flex flex-col max-h-[40vh]">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-red-500 mb-3 border-b border-zinc-200 dark:border-zinc-800 pb-2 flex items-center gap-2">
                     <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
                     OUT OF STOCK ({outOfStockCount})
                   </h3>
                   <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 space-y-2">
                     {outOfStockItems.length === 0 ? (
-                       <div className="text-center text-[10px] font-bold text-zinc-600 uppercase tracking-widest pt-4">NO ALERTS</div>
+                       <div className="text-center text-[10px] font-bold text-zinc-500 dark:text-zinc-600 uppercase tracking-widest pt-4">NO ALERTS</div>
                     ) : (
                       outOfStockItems.map(item => (
-                        <div key={item.id} className="bg-zinc-950 border border-zinc-800 p-2.5 rounded-lg flex flex-col gap-1">
-                          <p className="text-[10px] font-medium text-zinc-100 uppercase tracking-widest truncate">{item.name}</p>
+                        <div key={item.id} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 p-2.5 rounded-lg flex flex-col gap-1">
+                          <p className="text-[10px] font-medium text-zinc-900 dark:text-zinc-100 uppercase tracking-widest truncate">{item.name}</p>
                           <div className="flex justify-between items-center">
                              <p className="text-[10px] text-zinc-500 font-mono tracking-widest">{item.sku}</p>
-                             <span className="text-[9px] font-bold text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded uppercase tracking-widest whitespace-nowrap">OUT</span>
+                             <span className="text-[9px] font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 px-1.5 py-0.5 rounded uppercase tracking-widest whitespace-nowrap">OUT</span>
                           </div>
                         </div>
                       ))
@@ -1634,22 +1709,21 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Low Stock Persistent Panel */}
-                <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-sm p-5 flex flex-col max-h-[40vh]">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-amber-500 mb-3 border-b border-zinc-800 pb-2 flex items-center gap-2">
+                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm p-5 flex flex-col max-h-[40vh]">
+                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-amber-500 mb-3 border-b border-zinc-200 dark:border-zinc-800 pb-2 flex items-center gap-2">
                     <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     LOW STOCK ({lowStockCount})
                   </h3>
                   <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 space-y-2">
                     {lowStockItems.length === 0 ? (
-                       <div className="text-center text-[10px] font-bold text-zinc-600 uppercase tracking-widest pt-4">NO ALERTS</div>
+                       <div className="text-center text-[10px] font-bold text-zinc-500 dark:text-zinc-600 uppercase tracking-widest pt-4">NO ALERTS</div>
                     ) : (
                       lowStockItems.map(item => (
-                        <div key={item.id} className="bg-zinc-950 border border-zinc-800 p-2.5 rounded-lg flex flex-col gap-1">
-                          <p className="text-[10px] font-medium text-zinc-100 uppercase tracking-widest truncate">{item.name}</p>
+                        <div key={item.id} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 p-2.5 rounded-lg flex flex-col gap-1">
+                          <p className="text-[10px] font-medium text-zinc-900 dark:text-zinc-100 uppercase tracking-widest truncate">{item.name}</p>
                           <div className="flex justify-between items-center">
                              <p className="text-[10px] text-zinc-500 font-mono tracking-widest">{item.sku}</p>
-                             <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded uppercase tracking-widest whitespace-nowrap">LOW: {item.stock}</span>
+                             <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 px-1.5 py-0.5 rounded uppercase tracking-widest whitespace-nowrap">LOW: {item.stock}</span>
                           </div>
                         </div>
                       ))
@@ -1663,7 +1737,7 @@ export default function App() {
 
           {activeView === 'sales' && (
             <div className="max-w-6xl mx-auto space-y-6">
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-sm flex flex-wrap justify-between items-center gap-4">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 shadow-sm flex flex-wrap justify-between items-center gap-4">
                 <div className="flex gap-3 items-end flex-wrap">
                   <div>
                     <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5">SEARCH</label>
@@ -1674,19 +1748,19 @@ export default function App() {
                          placeholder="INVOICE OR ITEM..." 
                          value={salesSearchQuery} 
                          onChange={e => setSalesSearchQuery(e.target.value)} 
-                         className="bg-zinc-950 border border-zinc-800 pl-8 pr-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 w-48 text-zinc-100 transition-colors shadow-sm placeholder:text-zinc-600"
+                         className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-8 pr-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 w-48 text-zinc-900 dark:text-zinc-100 transition-colors shadow-sm placeholder:text-zinc-400 dark:placeholder:text-zinc-600"
                       />
                     </div>
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5">CASHIER</label>
-                    <select value={salesCashierFilter} onChange={e => setSalesCashierFilter(e.target.value)} className="bg-zinc-950 border border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-100 cursor-pointer transition-colors shadow-sm appearance-none">
+                    <select value={salesCashierFilter} onChange={e => setSalesCashierFilter(e.target.value)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 cursor-pointer transition-colors shadow-sm appearance-none">
                       {uniqueCashiers.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5">DATE FILTER</label>
-                    <select value={salesDateFilter} onChange={e => setSalesDateFilter(e.target.value)} className="bg-zinc-950 border border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-100 cursor-pointer transition-colors shadow-sm appearance-none">
+                    <select value={salesDateFilter} onChange={e => setSalesDateFilter(e.target.value)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 cursor-pointer transition-colors shadow-sm appearance-none">
                       <option value="ALL">ALL TIME</option>
                       <option value="TODAY">TODAY</option>
                       <option value="THIS WEEK">THIS WEEK</option>
@@ -1698,21 +1772,21 @@ export default function App() {
                   {salesDateFilter === 'CUSTOM' && (
                     <div>
                       <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5">SELECT DATE</label>
-                      <input type="date" value={salesCustomDate} onChange={e => setSalesCustomDate(e.target.value)} className="bg-zinc-950 border border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-100 transition-colors shadow-sm" />
+                      <input type="date" value={salesCustomDate} onChange={e => setSalesCustomDate(e.target.value)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-3 py-2 rounded-lg text-[10px] font-medium uppercase tracking-widest outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors shadow-sm" />
                     </div>
                   )}
-                  <button type="button" onClick={() => downloadCSV(filteredSales, ['id', 'timestamp', 'cashier', 'subtotal', 'discount', 'total', 'profit'], 'Sales_Report.csv')} className="bg-zinc-800 border border-zinc-700 text-zinc-300 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-zinc-700 shadow-sm h-fit">EXPORT CSV</button>
+                  <button type="button" onClick={() => downloadCSV(filteredSales, ['id', 'timestamp', 'cashier', 'subtotal', 'discount', 'total', 'profit'], 'Sales_Report.csv')} className="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-700 shadow-sm h-fit">EXPORT CSV</button>
                 </div>
-                <div className="bg-amber-500/10 px-5 py-3 rounded-xl text-right shadow-sm border border-amber-500/20">
-                  <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest mb-0.5">FILTERED REVENUE</p>
-                  <p className="text-xl font-bold text-amber-500 tracking-tight">{settings.currencySymbol}{totalFilteredSales.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+                <div className="bg-amber-50 dark:bg-amber-500/10 px-5 py-3 rounded-xl text-right shadow-sm border border-amber-200 dark:border-amber-500/20">
+                  <p className="text-[10px] font-bold text-amber-600 dark:text-amber-500 uppercase tracking-widest mb-0.5">FILTERED REVENUE</p>
+                  <p className="text-xl font-bold text-amber-600 dark:text-amber-500 tracking-tight">{settings.currencySymbol}{totalFilteredSales.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
                 </div>
               </div>
 
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-sm overflow-hidden flex flex-col">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden flex flex-col">
                 <div className="flex-1 overflow-x-auto">
                   <table className="w-full text-left">
-                    <thead className="bg-zinc-950 border-b border-zinc-800">
+                    <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
                       <tr>
                         <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">INVOICE ID</th>
                         <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">DATE & TIME</th>
@@ -1722,33 +1796,33 @@ export default function App() {
                         <th className="px-6 py-3 text-right text-[10px] font-bold text-zinc-500 uppercase tracking-widest">ACTIONS</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-zinc-800">
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                       {paginatedSales.map(s => (
-                        <tr key={s.id} className="hover:bg-zinc-800/50 transition-colors">
-                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300 flex items-center gap-2">
+                        <tr key={s.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
                             {s.id}
                           </td>
-                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{s.timestamp}</td>
-                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-100">{s.cashier}</td>
-                          <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-100">{settings.currencySymbol}{(Number(s.total)||0).toFixed(2)}</td>
-                          <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-green-500">{settings.currencySymbol}{(Number(s.profit)||0).toFixed(2)}</td>
+                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{s.timestamp}</td>
+                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100">{s.cashier}</td>
+                          <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100">{settings.currencySymbol}{(Number(s.total)||0).toFixed(2)}</td>
+                          <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-green-600 dark:text-green-500">{settings.currencySymbol}{(Number(s.profit)||0).toFixed(2)}</td>
                           <td className="px-6 py-3 text-right">
-                            <button type="button" onClick={() => handleReprintReceipt(s)} className="text-[10px] font-bold uppercase tracking-widest text-amber-500 hover:text-amber-400 transition-colors bg-zinc-800 px-3 py-1.5 rounded-md border border-zinc-700 hover:bg-zinc-700 shadow-sm">VIEW</button>
+                            <button type="button" onClick={() => handleReprintReceipt(s)} className="text-[10px] font-bold uppercase tracking-widest text-amber-600 dark:text-amber-500 hover:text-amber-500 dark:hover:text-amber-400 transition-colors bg-white dark:bg-zinc-800 px-3 py-1.5 rounded-md border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 shadow-sm">VIEW</button>
                           </td>
                         </tr>
                       ))}
                       {paginatedSales.length === 0 && (
-                        <tr><td colSpan="6" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-600">NO SALES MATCH CURRENT FILTERS.</td></tr>
+                        <tr><td colSpan="6" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-600">NO SALES MATCH CURRENT FILTERS.</td></tr>
                       )}
                     </tbody>
                   </table>
                 </div>
                 {salesTotalPages > 1 && (
-                  <div className="flex justify-between items-center px-6 py-3 bg-zinc-950 border-t border-zinc-800">
+                  <div className="flex justify-between items-center px-6 py-3 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">PAGE {salesPage} OF {salesTotalPages}</span>
                     <div className="flex gap-2">
-                      <button type="button" disabled={salesPage === 1} onClick={() => setSalesPage(salesPage - 1)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-800 transition-colors shadow-sm">PREV</button>
-                      <button type="button" disabled={salesPage === salesTotalPages} onClick={() => setSalesPage(salesPage + 1)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-800 transition-colors shadow-sm">NEXT</button>
+                      <button type="button" disabled={salesPage === 1} onClick={() => setSalesPage(salesPage - 1)} className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shadow-sm">PREV</button>
+                      <button type="button" disabled={salesPage === salesTotalPages} onClick={() => setSalesPage(salesPage + 1)} className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shadow-sm">NEXT</button>
                     </div>
                   </div>
                 )}
@@ -1759,12 +1833,12 @@ export default function App() {
           {activeView === 'finance' && (
             <div className="max-w-6xl mx-auto space-y-6">
               <div className="flex justify-between items-end mb-4">
-                <h3 className="text-sm font-bold text-zinc-100 tracking-widest uppercase">SHIFT RECONCILIATIONS</h3>
-                <button type="button" onClick={() => downloadCSV(shifts, ['id', 'start_time', 'end_time', 'opened_by', 'starting_float', 'expected_cash', 'actual_cash', 'status'], 'Shifts_Report.csv')} className="bg-zinc-800 border border-zinc-700 text-zinc-300 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-zinc-700 shadow-sm">EXPORT DATA</button>
+                <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase">SHIFT RECONCILIATIONS</h3>
+                <button type="button" onClick={() => downloadCSV(shifts, ['id', 'start_time', 'end_time', 'opened_by', 'starting_float', 'expected_cash', 'actual_cash', 'status'], 'Shifts_Report.csv')} className="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-700 shadow-sm">EXPORT DATA</button>
               </div>
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-sm overflow-hidden">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden">
                 <table className="w-full text-left">
-                  <thead className="bg-zinc-950 border-b border-zinc-800">
+                  <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
                     <tr>
                       <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">START SHIFT</th>
                       <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">MANAGER / CASHIER</th>
@@ -1773,15 +1847,15 @@ export default function App() {
                       <th className="px-6 py-3 text-right text-[10px] font-bold text-zinc-500 uppercase tracking-widest">END SHIFT</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-800">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                     {shifts.map((s) => {
                       const diff = s.actual_cash ? s.actual_cash - s.expected_cash : 0;
                       return (
-                        <tr key={s.id} className="hover:bg-zinc-800/50 transition-colors">
-                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{s.start_time}</td>
-                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-100">{s.opened_by}</td>
-                          <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-300">{settings.currencySymbol}{s.expected_cash.toFixed(2)}</td>
-                          <td className={`px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest ${diff < 0 ? 'text-red-400' : diff > 0 ? 'text-blue-400' : 'text-green-400'}`}>
+                        <tr key={s.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{s.start_time}</td>
+                          <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100">{s.opened_by}</td>
+                          <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{settings.currencySymbol}{s.expected_cash.toFixed(2)}</td>
+                          <td className={`px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest ${diff < 0 ? 'text-red-600 dark:text-red-400' : diff > 0 ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'}`}>
                             {s.status === 'closed' ? (diff > 0 ? `+${settings.currencySymbol}${diff.toFixed(2)}` : `${settings.currencySymbol}${diff.toFixed(2)}`) : 'ACTIVE'}
                           </td>
                           <td className="px-6 py-3 text-right text-[10px] font-medium uppercase tracking-widest text-zinc-500">{s.end_time || 'ACTIVE'}</td>
@@ -1789,7 +1863,7 @@ export default function App() {
                       )
                     })}
                     {shifts.length === 0 && (
-                      <tr><td colSpan="5" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-600">NO SHIFT RECORDS EXIST YET.</td></tr>
+                      <tr><td colSpan="5" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-600">NO SHIFT RECORDS EXIST YET.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1801,12 +1875,12 @@ export default function App() {
             <div className="max-w-4xl mx-auto space-y-6">
               
               <div className="flex justify-between items-end mb-4">
-                <h3 className="text-sm font-bold text-zinc-100 tracking-widest uppercase">TEAM ACCESS</h3>
+                <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase">TEAM ACCESS</h3>
                 <button type="button" onClick={() => setIsAddingUser(true)} className="bg-amber-500 text-zinc-950 px-5 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors hover:bg-amber-400 shadow-sm">ADD MEMBER</button>
               </div>
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-sm overflow-hidden">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden">
                 <table className="w-full text-left">
-                  <thead className="bg-zinc-950 border-b border-zinc-800">
+                  <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
                     <tr>
                       <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">FULL NAME</th>
                       <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">USERNAME</th>
@@ -1814,13 +1888,13 @@ export default function App() {
                       <th className="px-6 py-3 text-right text-[10px] font-bold text-zinc-500 uppercase tracking-widest">ACTIONS</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-zinc-800">
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                     {users.map((u) => (
-                      <tr key={u.id} className="hover:bg-zinc-800/50 transition-colors">
-                        <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-100">{u.name}</td>
-                        <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-400">{u.username}</td>
+                      <tr key={u.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                        <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100">{u.name}</td>
+                        <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-600 dark:text-zinc-400">{u.username}</td>
                         <td className="px-6 py-3">
-                          <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest border ${u.role === 'manager' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' : 'bg-zinc-800/50 text-zinc-400 border-zinc-700'}`}>{u.role}</span>
+                          <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest border ${u.role === 'manager' ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-500 border-amber-200 dark:border-amber-500/20' : 'bg-zinc-100 dark:bg-zinc-800/50 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700'}`}>{u.role}</span>
                         </td>
                         <td className="px-6 py-3 flex justify-end gap-3">
                           <button type="button" onClick={() => { setResetTargetUser(u); setIsResetPasswordModalOpen(true); }} className="text-zinc-500 hover:text-blue-500 transition-colors p-1" title="Change Password">
@@ -1841,17 +1915,17 @@ export default function App() {
           {activeView === 'logs' && (
             <div className="max-w-6xl mx-auto space-y-6">
               <div className="flex justify-between items-end mb-4">
-                <h3 className="text-sm font-bold text-zinc-100 tracking-widest uppercase">SECURITY AUDIT LOGS</h3>
-                <div className="flex gap-1 bg-zinc-950 border border-zinc-800 rounded-lg p-1 shadow-sm">
+                <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase">SECURITY AUDIT LOGS</h3>
+                <div className="flex gap-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-1 shadow-sm">
                   {['ALL', 'SYSTEM', 'ADD', 'EDIT', 'DELETE'].map(f => (
-                    <button key={f} onClick={() => setLogFilter(f)} className={`px-4 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-widest transition-colors ${logFilter === f ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'}`}>{f}</button>
+                    <button key={f} onClick={() => setLogFilter(f)} className={`px-4 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-widest transition-colors ${logFilter === f ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100' : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'}`}>{f}</button>
                   ))}
                 </div>
               </div>
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-sm overflow-hidden flex flex-col">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm overflow-hidden flex flex-col">
                 <div className="flex-1 overflow-x-auto">
                   <table className="w-full text-left">
-                    <thead className="bg-zinc-950 border-b border-zinc-800">
+                    <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
                       <tr>
                         <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest w-48">DATE & TIME</th>
                         <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest w-40">EVENT TYPE</th>
@@ -1860,7 +1934,7 @@ export default function App() {
                         <th className="px-6 py-3 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">STOCK CHANGE (+/-)</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-zinc-800">
+                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                       {paginatedLogs.map((log) => {
                         let parsedDetails = { msg: log.details, category: '-', qty: '-' };
                         try {
@@ -1869,27 +1943,27 @@ export default function App() {
                         } catch (e) {}
 
                         return (
-                          <tr key={log.id} className="hover:bg-zinc-800/50 transition-colors">
-                            <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-400">{log.timestamp}</td>
-                            <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-300">{log.action}</td>
-                            <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-100">{parsedDetails.msg}</td>
+                          <tr key={log.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                            <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-600 dark:text-zinc-400">{log.timestamp}</td>
+                            <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-700 dark:text-zinc-300">{log.action}</td>
+                            <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-900 dark:text-zinc-100">{parsedDetails.msg}</td>
                             <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-500">{parsedDetails.category}</td>
-                            <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-400 font-mono">{parsedDetails.qty}</td>
+                            <td className="px-6 py-3 text-[10px] font-medium uppercase tracking-widest text-zinc-600 dark:text-zinc-400 font-mono">{parsedDetails.qty}</td>
                           </tr>
                         );
                       })}
                       {paginatedLogs.length === 0 && (
-                        <tr><td colSpan="5" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-600">NO SYSTEM EVENTS LOGGED MATCHING FILTER.</td></tr>
+                        <tr><td colSpan="5" className="px-6 py-12 text-center text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-600">NO SYSTEM EVENTS LOGGED MATCHING FILTER.</td></tr>
                       )}
                     </tbody>
                   </table>
                 </div>
                 {logsTotalPages > 1 && (
-                  <div className="flex justify-between items-center px-6 py-3 bg-zinc-950 border-t border-zinc-800">
+                  <div className="flex justify-between items-center px-6 py-3 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">PAGE {logsPage} OF {logsTotalPages}</span>
                     <div className="flex gap-2">
-                      <button type="button" disabled={logsPage === 1} onClick={() => setLogsPage(logsPage - 1)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-800 transition-colors shadow-sm">PREV</button>
-                      <button type="button" disabled={logsPage === logsTotalPages} onClick={() => setLogsPage(logsPage + 1)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-800 transition-colors shadow-sm">NEXT</button>
+                      <button type="button" disabled={logsPage === 1} onClick={() => setLogsPage(logsPage - 1)} className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shadow-sm">PREV</button>
+                      <button type="button" disabled={logsPage === logsTotalPages} onClick={() => setLogsPage(logsPage + 1)} className="px-3 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-md text-[10px] font-bold uppercase tracking-widest disabled:opacity-50 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shadow-sm">NEXT</button>
                     </div>
                   </div>
                 )}
@@ -1900,18 +1974,18 @@ export default function App() {
           {activeView === 'terminal' && (
             !activeShift ? (
               <div className="h-full flex items-center justify-center pb-20 z-10 relative">
-                <div className="bg-zinc-900 border border-zinc-800 p-10 rounded-xl shadow-sm max-w-sm w-full text-center">
-                  <div className="w-12 h-12 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center justify-center mb-6 mx-auto shadow-sm">
+                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-10 rounded-xl shadow-sm max-w-sm w-full text-center">
+                  <div className="w-12 h-12 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg flex items-center justify-center mb-6 mx-auto shadow-sm">
                     <svg className="w-6 h-6 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
                   </div>
-                  <h3 className="text-sm font-bold text-zinc-100 mb-2 tracking-widest uppercase">INITIALIZE REGISTER</h3>
+                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 mb-2 tracking-widest uppercase">INITIALIZE REGISTER</h3>
                   <p className="text-[10px] text-zinc-500 mb-8 font-bold uppercase tracking-widest">VERIFY STARTING FLOAT</p>
                   
                   <div className="relative mb-8 text-left">
                     <label className="block text-[10px] font-bold text-zinc-500 mb-2 uppercase tracking-widest">STARTING CASH</label>
                     <div className="relative">
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-bold text-lg">{settings.currencySymbol}</span>
-                      <input type="number" step="0.01" value={floatInput} onChange={(e) => setFloatInput(e.target.value)} className="w-full text-left pl-10 pr-4 py-3.5 bg-zinc-950 border border-zinc-800 rounded-lg text-lg font-bold outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-100 transition-colors placeholder:text-zinc-600 shadow-sm" placeholder="0.00" autoFocus />
+                      <input type="number" step="0.01" value={floatInput} onChange={(e) => setFloatInput(e.target.value)} className="w-full text-left pl-10 pr-4 py-3.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-lg font-bold outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm" placeholder="0.00" autoFocus />
                     </div>
                   </div>
                   
@@ -1921,16 +1995,16 @@ export default function App() {
             ) : (
               <div className="flex gap-6 h-full max-w-[1400px] mx-auto z-10 relative">
                 
-                <div className="flex-1 bg-zinc-900 rounded-xl shadow-sm border border-zinc-800 flex flex-col overflow-hidden">
+                <div className="flex-1 bg-white dark:bg-zinc-900 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden">
                   
-                  <div className="p-4 border-b border-zinc-800 bg-zinc-950 relative z-20 flex flex-col gap-4">
+                  <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 relative z-20 flex flex-col gap-4">
                     <div className="flex gap-2 flex-wrap">
                       {['ALL', 'FOODS', 'DRINKS', 'SUPPLIES', 'OTHER'].map(cat => (
                         <button 
                           type="button"
                           key={cat}
                           onClick={() => setTerminalCategory(cat)}
-                          className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border shadow-sm ${terminalCategory === cat ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' : 'bg-zinc-900 text-zinc-500 border-zinc-800 hover:bg-zinc-800 hover:text-zinc-100'}`}
+                          className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors border shadow-sm ${terminalCategory === cat ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-500 border-amber-200 dark:border-amber-500/20' : 'bg-white dark:bg-zinc-900 text-zinc-500 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100'}`}
                         >
                           {cat}
                         </button>
@@ -1945,16 +2019,16 @@ export default function App() {
                         placeholder="SEARCH PRODUCTS OR SCAN BARCODE (F1)..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 border border-zinc-800 rounded-lg text-[10px] font-bold uppercase tracking-widest outline-none transition-colors placeholder:text-zinc-600 shadow-sm bg-zinc-900 focus:border-amber-500 text-zinc-100 focus:ring-1 focus:ring-amber-500/50"
+                        className="w-full pl-10 pr-4 py-3 border border-zinc-200 dark:border-zinc-800 rounded-lg text-[10px] font-bold uppercase tracking-widest outline-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm bg-white dark:bg-zinc-900 focus:border-amber-500 text-zinc-900 dark:text-zinc-100 focus:ring-1 focus:ring-amber-500/50"
                       />
                     </div>
                   </div>
 
-                  <div className="flex-1 overflow-y-auto z-10 transition-colors custom-scrollbar bg-zinc-950 p-4">
+                  <div className="flex-1 overflow-y-auto z-10 transition-colors custom-scrollbar bg-white dark:bg-zinc-950 p-4">
                     {filteredTerminalInventory.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-full text-zinc-500 space-y-4 pb-10">
-                        <div className="w-12 h-12 bg-zinc-900 border border-zinc-800 shadow-sm rounded-lg flex items-center justify-center">
-                          <svg className="w-6 h-6 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                        <div className="w-12 h-12 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-sm rounded-lg flex items-center justify-center">
+                          <svg className="w-6 h-6 text-zinc-400 dark:text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
                         </div>
                         <p className="text-[10px] font-bold uppercase tracking-widest">NO PRODUCTS FOUND.</p>
                       </div>
@@ -1965,16 +2039,16 @@ export default function App() {
                             type="button"
                             key={item.sku} 
                             onClick={() => handleAddToCart(item)}
-                            className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex flex-col items-center justify-center text-center gap-2 hover:border-amber-500/50 hover:shadow-sm transition-colors"
+                            className="bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-xl flex flex-col items-center justify-center text-center gap-2 hover:border-amber-500/50 hover:shadow-sm transition-colors"
                           >
-                            <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-100 line-clamp-2 leading-tight">{item.name}</span>
-                            <span className="text-[10px] font-bold tracking-widest text-zinc-400">{settings.currencySymbol}{(Number(item.price)||0).toFixed(2)}</span>
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100 line-clamp-2 leading-tight">{item.name}</span>
+                            <span className="text-[10px] font-bold tracking-widest text-zinc-600 dark:text-zinc-400">{settings.currencySymbol}{(Number(item.price)||0).toFixed(2)}</span>
                             {Number(item.stock) <= 0 ? (
-                              <span className="bg-red-500/10 text-red-400 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border border-red-500/20 mt-1 w-full">OUT OF STOCK</span>
+                              <span className="bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border border-red-200 dark:border-red-500/20 mt-1 w-full">OUT OF STOCK</span>
                             ) : Number(item.stock) <= settings.lowStockThreshold ? (
-                              <span className="bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border border-amber-500/20 mt-1 w-full">LOW: {item.stock}</span>
+                              <span className="bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border border-amber-200 dark:border-amber-500/20 mt-1 w-full">LOW: {item.stock}</span>
                             ) : (
-                              <span className="bg-zinc-800/50 text-zinc-500 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border border-zinc-700 mt-1 w-full">STOCK: {item.stock}</span>
+                              <span className="bg-zinc-100 dark:bg-zinc-800/50 text-zinc-600 dark:text-zinc-500 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border border-zinc-200 dark:border-zinc-700 mt-1 w-full">STOCK: {item.stock}</span>
                             )}
                           </button>
                         ))}
@@ -1983,31 +2057,31 @@ export default function App() {
                   </div>
                 </div>
                 
-                <div className="w-[380px] rounded-xl shadow-sm border p-5 flex flex-col h-full bg-zinc-900 border-zinc-800 shrink-0">
+                <div className="w-[380px] rounded-xl shadow-sm border p-5 flex flex-col h-full bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 shrink-0">
                   
-                  <div className="flex justify-between items-center mb-4 pb-4 border-b border-zinc-800">
-                    <h3 className="text-[11px] font-bold uppercase tracking-widest text-zinc-100">CURRENT ORDER</h3>
+                  <div className="flex justify-between items-center mb-4 pb-4 border-b border-zinc-200 dark:border-zinc-800">
+                    <h3 className="text-[11px] font-bold uppercase tracking-widest text-zinc-900 dark:text-zinc-100">CURRENT ORDER</h3>
                     <span className="text-[10px] font-bold text-zinc-500 tracking-widest">{cart.length} ITEMS</span>
                   </div>
 
-                  <div className="flex-1 overflow-y-auto custom-scrollbar mb-4 bg-zinc-950 border border-zinc-800 rounded-lg">
+                  <div className="flex-1 overflow-y-auto custom-scrollbar mb-4 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg">
                     {cart.length === 0 ? (
                       <div className="flex items-center justify-center h-full">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-600">CART IS EMPTY.</p>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-600">CART IS EMPTY.</p>
                       </div>
                     ) : (
-                      <div className="flex flex-col divide-y divide-zinc-800 p-2">
+                      <div className="flex flex-col divide-y divide-zinc-200 dark:divide-zinc-800 p-2">
                         {cart.map((item, i) => (
-                          <div key={i} className="p-3 bg-zinc-900 border border-zinc-800 rounded-md shadow-sm mb-2 last:mb-0">
+                          <div key={i} className="p-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md shadow-sm mb-2 last:mb-0">
                             <div className="flex justify-between items-start mb-2">
-                              <span className="text-[10px] font-bold uppercase tracking-widest line-clamp-2 pr-2 leading-tight text-zinc-100">{item.name}</span>
-                              <span className="text-[10px] font-bold tracking-widest shrink-0 text-zinc-100">{settings.currencySymbol}{((Number(item.price)||0) * (Number(item.qty)||0)).toFixed(2)}</span>
+                              <span className="text-[10px] font-bold uppercase tracking-widest line-clamp-2 pr-2 leading-tight text-zinc-900 dark:text-zinc-100">{item.name}</span>
+                              <span className="text-[10px] font-bold tracking-widest shrink-0 text-zinc-900 dark:text-zinc-100">{settings.currencySymbol}{((Number(item.price)||0) * (Number(item.qty)||0)).toFixed(2)}</span>
                             </div>
                             <div className="flex justify-between items-center">
-                              <div className="flex items-center bg-zinc-950 border border-zinc-800 rounded">
-                                <button type="button" onClick={() => handleUpdateCartQty(item.sku, item.qty - 1)} className="w-7 h-6 flex items-center justify-center text-zinc-500 hover:text-zinc-100 font-bold hover:bg-zinc-800 rounded-l transition-colors">-</button>
-                                <input type="number" value={item.qty} onChange={(e) => handleUpdateCartQty(item.sku, e.target.value)} className="w-10 text-center text-[10px] font-bold bg-transparent outline-none text-zinc-100" />
-                                <button type="button" onClick={() => handleUpdateCartQty(item.sku, item.qty + 1)} className="w-7 h-6 flex items-center justify-center text-zinc-500 hover:text-zinc-100 font-bold hover:bg-zinc-800 rounded-r transition-colors">+</button>
+                              <div className="flex items-center bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded">
+                                <button type="button" onClick={() => handleUpdateCartQty(item.sku, item.qty - 1)} className="w-7 h-6 flex items-center justify-center text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 font-bold hover:bg-zinc-100 dark:bg-zinc-800 rounded-l transition-colors">-</button>
+                                <input type="number" value={item.qty} onChange={(e) => handleUpdateCartQty(item.sku, e.target.value)} className="w-10 text-center text-[10px] font-bold bg-transparent outline-none text-zinc-900 dark:text-zinc-100" />
+                                <button type="button" onClick={() => handleUpdateCartQty(item.sku, item.qty + 1)} className="w-7 h-6 flex items-center justify-center text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 font-bold hover:bg-zinc-100 dark:bg-zinc-800 rounded-r transition-colors">+</button>
                               </div>
                               <button type="button" onClick={() => handleVoidCartItem(item.sku, item.name)} className="text-zinc-500 hover:text-red-500 transition-colors p-1" title="Remove Item">
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
@@ -2019,15 +2093,15 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="flex justify-between items-end mb-6 border-b border-zinc-800 pb-4">
+                  <div className="flex justify-between items-end mb-6 border-b border-zinc-200 dark:border-zinc-800 pb-4">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">TOTAL DUE</span>
-                    <span className="text-2xl font-bold tracking-tight text-zinc-100">{settings.currencySymbol}{safeTotalDue.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                    <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">{settings.currencySymbol}{safeTotalDue.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                   </div>
 
                   <div className="mb-6">
-                    <label className="block text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">CASH TENDERED <span className="ml-1 text-[8px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700">F4</span></label>
+                    <label className="block text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">CASH TENDERED <span className="ml-1 text-[8px] bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-700">F4</span></label>
                     <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 font-bold text-lg">{settings.currencySymbol}</span>
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 font-bold text-lg">{settings.currencySymbol}</span>
                       <input 
                         ref={amountInputRef}
                         type="number" 
@@ -2041,14 +2115,14 @@ export default function App() {
                           }
                         }}
                         disabled={cart.length === 0} 
-                        className="w-full pl-10 pr-3 py-3 rounded-lg text-lg font-bold outline-none transition-colors placeholder:text-zinc-600 shadow-sm bg-zinc-950 border border-zinc-800 focus:border-amber-500 text-zinc-100 focus:ring-1 focus:ring-amber-500/50 disabled:opacity-50"
+                        className="w-full pl-10 pr-3 py-3 rounded-lg text-lg font-bold outline-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:border-amber-500 text-zinc-900 dark:text-zinc-100 focus:ring-1 focus:ring-amber-500/50 disabled:opacity-50"
                         placeholder="0.00" 
                       />
                     </div>
                     
-                    <div className="flex justify-between items-center mt-5 pt-4 border-t border-zinc-800">
+                    <div className="flex justify-between items-center mt-5 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                       <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">CHANGE</span>
-                      <span className={`text-xl font-bold tracking-tight ${safeChange >= 0 ? 'text-green-500' : 'text-zinc-600'}`}>{settings.currencySymbol}{safeChange >= 0 ? safeChange.toLocaleString(undefined, {minimumFractionDigits: 2}) : '0.00'}</span>
+                      <span className={`text-xl font-bold tracking-tight ${safeChange >= 0 ? 'text-green-500' : 'text-zinc-400 dark:text-zinc-600'}`}>{settings.currencySymbol}{safeChange >= 0 ? safeChange.toLocaleString(undefined, {minimumFractionDigits: 2}) : '0.00'}</span>
                     </div>
                   </div>
                   
@@ -2057,15 +2131,15 @@ export default function App() {
                   </button>
                   
                   <div className="grid grid-cols-3 gap-2 mt-3">
-                    <button type="button" onClick={handleHoldCart} disabled={cart.length === 0} className="bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 py-2.5 rounded-lg text-[9px] font-bold uppercase tracking-widest disabled:opacity-50 transition-colors shadow-sm flex flex-col items-center justify-center gap-1">
+                    <button type="button" onClick={handleHoldCart} disabled={cart.length === 0} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 py-2.5 rounded-lg text-[9px] font-bold uppercase tracking-widest disabled:opacity-50 transition-colors shadow-sm flex flex-col items-center justify-center gap-1">
                       HOLD 
-                      <span className="text-[8px] bg-zinc-800 px-1 rounded border border-zinc-700 text-zinc-400 font-sans font-bold">F8</span>
+                      <span className="text-[8px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded border border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 font-sans font-bold">F8</span>
                     </button>
-                    <button type="button" onClick={() => setIsResumeOpen(true)} disabled={heldCarts.length === 0} className="bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-amber-500 py-2.5 rounded-lg text-[9px] font-bold uppercase tracking-widest disabled:opacity-50 transition-colors shadow-sm relative flex flex-col items-center justify-center gap-1">
+                    <button type="button" onClick={() => setIsResumeOpen(true)} disabled={heldCarts.length === 0} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-amber-600 dark:text-amber-500 py-2.5 rounded-lg text-[9px] font-bold uppercase tracking-widest disabled:opacity-50 transition-colors shadow-sm relative flex flex-col items-center justify-center gap-1">
                       RESUME
                       {heldCarts.length > 0 && <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-zinc-950 w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold shadow-sm">{heldCarts.length}</span>}
                     </button>
-                    <button type="button" onClick={() => setIsCashModalOpen(true)} className="bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-100 py-2.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-colors shadow-sm flex flex-col items-center justify-center gap-1">
+                    <button type="button" onClick={() => setIsCashModalOpen(true)} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-900 dark:text-zinc-100 py-2.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-colors shadow-sm flex flex-col items-center justify-center gap-1">
                       DRAWER I/O
                     </button>
                   </div>
@@ -2076,25 +2150,25 @@ export default function App() {
 
           {isCashModalOpen && (
             <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
-              <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-sm w-full">
+              <div className="bg-white dark:bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-w-sm w-full">
                 <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase">DRAWER OPERATION</h2>
+                  <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase">DRAWER OPERATION</h2>
                 </div>
                 <form onSubmit={handleCashAdjustmentSubmit} className="space-y-5">
-                  <div className="flex gap-2 bg-zinc-950 p-1.5 rounded-lg border border-zinc-800">
-                    <button type="button" onClick={() => setCashDropData({...cashDropData, type: 'IN'})} className={`flex-1 py-2.5 rounded-md text-[10px] font-bold uppercase tracking-widest transition-colors border ${cashDropData.type === 'IN' ? 'bg-zinc-800 text-amber-500 border-zinc-700 shadow-sm' : 'bg-transparent text-zinc-500 hover:bg-zinc-900 border-transparent shadow-none'}`}>CASH IN</button>
-                    <button type="button" onClick={() => setCashDropData({...cashDropData, type: 'OUT'})} className={`flex-1 py-2.5 rounded-md text-[10px] font-bold uppercase tracking-widest transition-colors border ${cashDropData.type === 'OUT' ? 'bg-zinc-800 text-amber-500 border-zinc-700 shadow-sm' : 'bg-transparent text-zinc-500 hover:bg-zinc-900 border-transparent shadow-none'}`}>PAYOUT</button>
+                  <div className="flex gap-2 bg-zinc-50 dark:bg-zinc-950 p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
+                    <button type="button" onClick={() => setCashDropData({...cashDropData, type: 'IN'})} className={`flex-1 py-2.5 rounded-md text-[10px] font-bold uppercase tracking-widest transition-colors border ${cashDropData.type === 'IN' ? 'bg-white dark:bg-zinc-800 text-amber-500 border-zinc-200 dark:border-zinc-700 shadow-sm' : 'bg-transparent text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900 border-transparent shadow-none'}`}>CASH IN</button>
+                    <button type="button" onClick={() => setCashDropData({...cashDropData, type: 'OUT'})} className={`flex-1 py-2.5 rounded-md text-[10px] font-bold uppercase tracking-widest transition-colors border ${cashDropData.type === 'OUT' ? 'bg-white dark:bg-zinc-800 text-amber-500 border-zinc-200 dark:border-zinc-700 shadow-sm' : 'bg-transparent text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900 border-transparent shadow-none'}`}>PAYOUT</button>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2 block">AMOUNT ({settings.currencySymbol})</label>
-                    <input required type="number" step="0.01" value={cashDropData.amount} onChange={e => setCashDropData({...cashDropData, amount: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-bold text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" placeholder="0.00" />
+                    <input required type="number" step="0.01" value={cashDropData.amount} onChange={e => setCashDropData({...cashDropData, amount: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-bold text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" placeholder="0.00" />
                   </div>
                   <div>
                     <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2 block">REASON / REFERENCE</label>
-                    <input required type="text" value={cashDropData.reason} onChange={e => setCashDropData({...cashDropData, reason: e.target.value})} className="w-full bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-bold text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase shadow-sm" placeholder="E.G. WATER DELIVERY" />
+                    <input required type="text" value={cashDropData.reason} onChange={e => setCashDropData({...cashDropData, reason: e.target.value})} className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 px-4 py-2 rounded-lg text-[10px] font-bold text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors uppercase shadow-sm" placeholder="E.G. WATER DELIVERY" />
                   </div>
-                  <div className="flex justify-end gap-3 pt-6 border-t border-zinc-800">
-                    <button type="button" onClick={() => setIsCashModalOpen(false)} className="px-5 py-2.5 text-[10px] font-bold uppercase tracking-widest text-zinc-400 hover:text-zinc-100 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 rounded-lg transition-colors shadow-sm">CANCEL</button>
+                  <div className="flex justify-end gap-3 pt-6 border-t border-zinc-200 dark:border-zinc-800">
+                    <button type="button" onClick={() => setIsCashModalOpen(false)} className="px-5 py-2.5 text-[10px] font-bold uppercase tracking-widest text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-lg transition-colors shadow-sm">CANCEL</button>
                     <button type="submit" className="px-6 py-2.5 bg-amber-500 text-zinc-950 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-amber-400 transition-colors shadow-sm">CONFIRM</button>
                   </div>
                 </form>
@@ -2104,18 +2178,18 @@ export default function App() {
 
           {isResumeOpen && (
             <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
-              <div className="bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-800 max-w-lg w-full">
+              <div className="bg-white dark:bg-zinc-900 p-8 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 max-w-lg w-full">
                 <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-[11px] font-bold text-zinc-100 tracking-widest uppercase">SUSPENDED CARTS</h2>
-                  <button type="button" onClick={() => setIsResumeOpen(false)} className="text-[10px] uppercase tracking-widest font-bold text-zinc-500 hover:text-zinc-100 transition-colors">CLOSE</button>
+                  <h2 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 tracking-widest uppercase">SUSPENDED CARTS</h2>
+                  <button type="button" onClick={() => setIsResumeOpen(false)} className="text-[10px] uppercase tracking-widest font-bold text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">CLOSE</button>
                 </div>
                 <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
                   {heldCarts.map((h, i) => (
-                    <div key={h.id} className="bg-zinc-950 border border-zinc-800 p-4 rounded-xl flex justify-between items-center hover:border-zinc-700 transition-colors shadow-sm">
+                    <div key={h.id} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 p-4 rounded-xl flex justify-between items-center hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors shadow-sm">
                       <div>
                         <div className="flex items-center gap-3 mb-1">
-                          <p className="text-[11px] font-bold uppercase tracking-wider text-zinc-100">CART #{i + 1}</p>
-                          <span className="bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded border border-zinc-800 text-[10px] font-mono font-bold tracking-widest">{new Date(h.id).toLocaleTimeString()}</span>
+                          <p className="text-[11px] font-bold uppercase tracking-wider text-zinc-900 dark:text-zinc-100">CART #{i + 1}</p>
+                          <span className="bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-500 px-2 py-0.5 rounded border border-zinc-200 dark:border-zinc-800 text-[10px] font-mono font-bold tracking-widest">{new Date(h.id).toLocaleTimeString()}</span>
                         </div>
                         <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">{h.cart.length} ITEM{h.cart.length !== 1 && 'S'} • {settings.currencySymbol}{h.cart.reduce((s, c) => s + ((Number(c.price)||0) * (Number(c.qty)||0)), 0).toFixed(2)}</p>
                       </div>
@@ -2123,8 +2197,8 @@ export default function App() {
                     </div>
                   ))}
                   {heldCarts.length === 0 && (
-                    <div className="py-12 flex flex-col items-center justify-center text-zinc-600">
-                      <svg className="w-12 h-12 mb-3 text-zinc-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                    <div className="py-12 flex flex-col items-center justify-center text-zinc-500 dark:text-zinc-600">
+                      <svg className="w-12 h-12 mb-3 text-zinc-400 dark:text-zinc-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
                       <p className="text-[10px] font-bold uppercase tracking-widest">NO SUSPENDED CARTS.</p>
                     </div>
                   )}
@@ -2134,36 +2208,36 @@ export default function App() {
           )}
 
           {activeView === 'zreading' && activeShift && (
-            <div className="max-w-md mx-auto bg-zinc-900 rounded-xl shadow-sm border border-zinc-800 p-10 mt-10">
-              <div className="mb-8 border-b border-zinc-800 pb-8 text-center">
-                <div className="w-12 h-12 bg-red-500/10 rounded-lg flex items-center justify-center mx-auto mb-6 border border-red-500/20 shadow-sm">
-                  <svg className="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+            <div className="max-w-md mx-auto bg-white dark:bg-zinc-900 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-800 p-10 mt-10">
+              <div className="mb-8 border-b border-zinc-200 dark:border-zinc-800 pb-8 text-center">
+                <div className="w-12 h-12 bg-red-50 dark:bg-red-500/10 rounded-lg flex items-center justify-center mx-auto mb-6 border border-red-200 dark:border-red-500/20 shadow-sm">
+                  <svg className="w-6 h-6 text-red-600 dark:text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
                 </div>
-                <h3 className="text-[11px] font-bold text-zinc-100 mb-2 tracking-widest uppercase">CLOSE REGISTER</h3>
+                <h3 className="text-[11px] font-bold text-zinc-900 dark:text-zinc-100 mb-2 tracking-widest uppercase">CLOSE REGISTER</h3>
                 <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">COUNT PHYSICAL CASH TO COMPLETE SHIFT.</p>
               </div>
               
               <div className="grid grid-cols-2 gap-4 mb-8">
-                <div className="bg-zinc-950 p-4 rounded-lg border border-zinc-800 shadow-sm">
+                <div className="bg-zinc-50 dark:bg-zinc-950 p-4 rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-sm">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-1">STARTING FLOAT</p>
-                  <p className="text-xl font-bold text-zinc-100 tracking-tight">{settings.currencySymbol}{activeShift.starting_float.toFixed(2)}</p>
+                  <p className="text-xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">{settings.currencySymbol}{activeShift.starting_float.toFixed(2)}</p>
                 </div>
-                <div className="bg-zinc-950 p-4 rounded-lg border border-zinc-800 shadow-sm">
+                <div className="bg-zinc-50 dark:bg-zinc-950 p-4 rounded-lg border border-zinc-200 dark:border-zinc-800 shadow-sm">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-1">SYSTEM EXPECTED</p>
-                  <p className="text-xl font-bold text-amber-500 tracking-tight">{settings.currencySymbol}{activeShift.expected_cash.toFixed(2)}</p>
+                  <p className="text-xl font-bold text-amber-600 dark:text-amber-500 tracking-tight">{settings.currencySymbol}{activeShift.expected_cash.toFixed(2)}</p>
                 </div>
               </div>
               
               <div className="mb-8">
                 <label className="block text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">ACTUAL CASH COUNTED ({settings.currencySymbol})</label>
                 <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold text-xl">{settings.currencySymbol}</span>
-                  <input type="number" step="0.01" value={zReadingCash} onChange={(e) => setZReadingCash(e.target.value)} className="w-full pl-10 pr-4 py-3 bg-zinc-950 border border-zinc-800 rounded-lg text-lg font-bold text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" placeholder="0.00" autoFocus />
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 font-bold text-xl">{settings.currencySymbol}</span>
+                  <input type="number" step="0.01" value={zReadingCash} onChange={(e) => setZReadingCash(e.target.value)} className="w-full pl-10 pr-4 py-3 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-lg font-bold text-zinc-900 dark:text-zinc-100 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 transition-colors shadow-sm" placeholder="0.00" autoFocus />
                 </div>
               </div>
               
               {zReadingCash !== '' && (
-                <div className={`p-5 rounded-lg mb-8 flex justify-between items-center shadow-sm transition-colors border ${parseFloat(zReadingCash) - activeShift.expected_cash < 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' : parseFloat(zReadingCash) - activeShift.expected_cash > 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-zinc-950 text-zinc-300 border-zinc-800'}`}>
+                <div className={`p-5 rounded-lg mb-8 flex justify-between items-center shadow-sm transition-colors border ${parseFloat(zReadingCash) - activeShift.expected_cash < 0 ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 border-red-200 dark:border-red-500/20' : parseFloat(zReadingCash) - activeShift.expected_cash > 0 ? 'bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 border-green-200 dark:border-green-500/20' : 'bg-zinc-50 dark:bg-zinc-950 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800'}`}>
                   <span className="text-[10px] uppercase tracking-widest font-bold">VARIANCE</span>
                   <span className="text-xl font-bold tracking-tight">{(parseFloat(zReadingCash) - activeShift.expected_cash) > 0 ? '+' : ''}{settings.currencySymbol}{(parseFloat(zReadingCash) - activeShift.expected_cash).toFixed(2)}</span>
                 </div>
@@ -2203,7 +2277,7 @@ export default function App() {
 
                 <div className="mt-8 print:hidden flex gap-3">
                   <button type="button" onClick={() => executePrint()} className="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors shadow-sm">PRINT</button>
-                  <button type="button" onClick={() => { setZReadingReceipt(null); setActiveView('terminal'); }} className="flex-1 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-100 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors shadow-sm">DONE</button>
+                  <button type="button" onClick={() => { setZReadingReceipt(null); setActiveView('terminal'); }} className="flex-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-900 dark:text-zinc-100 py-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors shadow-sm">DONE</button>
                 </div>
               </div>
             </div>
