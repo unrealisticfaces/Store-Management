@@ -1,10 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  loginUser: (creds) => ipcRenderer.invoke('login-user', creds),
+  loginUser: (credentials) => ipcRenderer.invoke('login-user', credentials),
   getUsers: () => ipcRenderer.invoke('get-users'),
   addUser: (user) => ipcRenderer.invoke('add-user', user),
   deleteUser: (id) => ipcRenderer.invoke('delete-user', id),
+  updateUserPassword: (id, newPassword) => ipcRenderer.invoke('update-user-password', { id, newPassword }),
   getInventory: () => ipcRenderer.invoke('get-inventory'),
   addProduct: (product) => ipcRenderer.invoke('add-product', product),
   updateProduct: (product) => ipcRenderer.invoke('update-product', product),
@@ -15,10 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addLog: (log) => ipcRenderer.invoke('add-log', log),
   getActiveShift: () => ipcRenderer.invoke('get-active-shift'),
   getAllShifts: () => ipcRenderer.invoke('get-all-shifts'),
-  openShift: (shift) => ipcRenderer.invoke('open-shift', shift),
-  closeShift: (req) => ipcRenderer.invoke('close-shift', req),
-  adjustShiftCash: (req) => ipcRenderer.invoke('adjust-shift-cash', req),
-  getPrinters: () => ipcRenderer.invoke('get-printers'),
-  printSilent: (printerName) => ipcRenderer.invoke('print-silent', printerName),
-  triggerCashDrawer: (printerName) => ipcRenderer.invoke('trigger-cash-drawer', printerName)
+  openShift: (shiftData) => ipcRenderer.invoke('open-shift', shiftData),
+  closeShift: (closingData) => ipcRenderer.invoke('close-shift', closingData),
+  adjustShiftCash: (req) => ipcRenderer.invoke('adjust-shift-cash', req)
 });

@@ -42,7 +42,7 @@ if (typeof window !== 'undefined' && !window.electronAPI) {
     },
     updateUserPassword: async (id, newPassword) => {
       const users = JSON.parse(localStorage.getItem('pos_users') || '[{"id":1,"username":"admin","name":"System Admin","role":"manager","password":"admin123"}]');
-      localStorage.setItem('pos_users', JSON.stringify(users.map(u => u.id === id ? { ...u, password: newPassword } : u)));
+      localStorage.setItem('pos_users', JSON.stringify(users.map(u => String(u.id) === String(id) ? { ...u, password: newPassword } : u)));
       return { success: true };
     },
     loginUser: async ({ username, password }) => {
@@ -520,17 +520,17 @@ export default function App() {
       return;
     }
     try {
-      if (window.electronAPI.updateUserPassword) {
-        await window.electronAPI.updateUserPassword(resetTargetUser.id, resetPasswordData.newPassword);
-        setUsers(await window.electronAPI.getUsers() || users);
-        showNotification('PASSWORD UPDATED', 'success');
-      }
+      await window.electronAPI.updateUserPassword(resetTargetUser.id, resetPasswordData.newPassword);
+      setUsers(await window.electronAPI.getUsers() || users);
+      showNotification('PASSWORD UPDATED', 'success');
       setIsResetPasswordModalOpen(false);
       setResetTargetUser(null);
       setResetPasswordData({ newPassword: '', confirmPassword: '' });
       setShowResetNewPassword(false);
       setShowResetConfirmPassword(false);
-    } catch (e) { showNotification('FAILED TO UPDATE PASSWORD', 'error'); }
+    } catch (e) { 
+      showNotification('FAILED TO UPDATE PASSWORD', 'error'); 
+    }
   };
 
   const handleOpenShift = async () => {
@@ -653,7 +653,7 @@ export default function App() {
     const matchSearch = printSearchQuery === '' || item.name.toLowerCase().includes(printSearchQuery.toLowerCase()) || item.sku.toLowerCase().includes(printSearchQuery.toLowerCase());
     const matchCat = printCategoryFilter === 'ALL' || item.category === printCategoryFilter;
     return matchSearch && matchCat;
-  }).slice(0, 50);
+  });
 
   const uniqueCashiers = ['ALL', ...new Set([...users.map(u => u.name), ...sales.map(s => s.cashier)].filter(Boolean))];
   
@@ -770,7 +770,7 @@ export default function App() {
                 value={loginPassword} 
                 onChange={(e) => setLoginPassword(e.target.value)} 
                 onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                className={`w-full pl-4 pr-10 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm ${showLoginPassword ? 'text-[10px] font-bold font-sans' : 'text-lg tracking-[0.2em] font-medium'}`} 
+                className="w-full pl-4 pr-10 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm text-[12px] font-bold font-sans" 
                 placeholder="PASSWORD"
               />
               <button type="button" onClick={() => setShowLoginPassword(!showLoginPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
@@ -903,7 +903,7 @@ export default function App() {
                     type={showAddUserPassword ? "text" : "password"} 
                     value={userFormData.password} 
                     onChange={e => setUserFormData({...userFormData, password: e.target.value})} 
-                    className={`w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm ${showAddUserPassword ? 'text-[10px] font-bold font-sans' : 'text-lg tracking-[0.2em] font-medium'}`} 
+                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm text-[12px] font-bold font-sans" 
                     placeholder="CREATE PASSWORD" 
                   />
                   <button type="button" onClick={() => setShowAddUserPassword(!showAddUserPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
@@ -947,7 +947,7 @@ export default function App() {
                     type={showResetNewPassword ? "text" : "password"} 
                     value={resetPasswordData.newPassword} 
                     onChange={e => setResetPasswordData({...resetPasswordData, newPassword: e.target.value})} 
-                    className={`w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm ${showResetNewPassword ? 'text-[10px] font-bold font-sans' : 'text-lg tracking-[0.2em] font-medium'}`} 
+                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm text-[12px] font-bold font-sans" 
                     placeholder="••••••••" 
                     autoFocus 
                   />
@@ -970,7 +970,7 @@ export default function App() {
                     type={showResetConfirmPassword ? "text" : "password"} 
                     value={resetPasswordData.confirmPassword} 
                     onChange={e => setResetPasswordData({...resetPasswordData, confirmPassword: e.target.value})} 
-                    className={`w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm ${showResetConfirmPassword ? 'text-[10px] font-bold font-sans' : 'text-lg tracking-[0.2em] font-medium'}`} 
+                    className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 pl-4 pr-10 py-2.5 rounded-lg outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50 text-zinc-900 dark:text-zinc-100 transition-colors placeholder:text-[10px] placeholder:font-bold placeholder:tracking-widest placeholder:text-zinc-400 dark:placeholder:text-zinc-600 shadow-sm text-[12px] font-bold font-sans" 
                     placeholder="••••••••" 
                   />
                   <button type="button" onClick={() => setShowResetConfirmPassword(!showResetConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors">
